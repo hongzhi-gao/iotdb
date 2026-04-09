@@ -26,7 +26,8 @@
 #include <memory>
 #include <cstdint>
 #include "IClientRPCService.h"
-#include <boost/date_time/gregorian/gregorian.hpp>
+#include "Date.h"
+#include "Optional.h"
 #include "TsBlock.h"
 
 class IoTDBRpcDataSet {
@@ -69,24 +70,24 @@ public:
     bool isNull(int32_t index, int32_t rowNum);
     bool isNullByIndex(int32_t columnIndex);
     bool isNullByColumnName(const std::string& columnName);
-    boost::optional<bool> getBooleanByIndex(int32_t columnIndex);
-    boost::optional<bool> getBoolean(const std::string& columnName);
-    boost::optional<double> getDoubleByIndex(int32_t columnIndex);
-    boost::optional<double> getDouble(const std::string& columnName);
-    boost::optional<float> getFloatByIndex(int32_t columnIndex);
-    boost::optional<float> getFloat(const std::string& columnName);
-    boost::optional<int32_t> getIntByIndex(int32_t columnIndex);
-    boost::optional<int32_t> getInt(const std::string& columnName);
-    boost::optional<int64_t> getLongByIndex(int32_t columnIndex);
-    boost::optional<int64_t> getLong(const std::string& columnName);
+    iotdb::Optional<bool> getBooleanByIndex(int32_t columnIndex);
+    iotdb::Optional<bool> getBoolean(const std::string& columnName);
+    iotdb::Optional<double> getDoubleByIndex(int32_t columnIndex);
+    iotdb::Optional<double> getDouble(const std::string& columnName);
+    iotdb::Optional<float> getFloatByIndex(int32_t columnIndex);
+    iotdb::Optional<float> getFloat(const std::string& columnName);
+    iotdb::Optional<int32_t> getIntByIndex(int32_t columnIndex);
+    iotdb::Optional<int32_t> getInt(const std::string& columnName);
+    iotdb::Optional<int64_t> getLongByIndex(int32_t columnIndex);
+    iotdb::Optional<int64_t> getLong(const std::string& columnName);
     std::shared_ptr<Binary> getBinaryByIndex(int32_t columnIndex);
     std::shared_ptr<Binary> getBinary(const std::string& columnName);
-    boost::optional<std::string> getStringByIndex(int32_t columnIndex);
-    boost::optional<std::string> getString(const std::string& columnName);
-    boost::optional<int64_t> getTimestampByIndex(int32_t columnIndex);
-    boost::optional<int64_t> getTimestamp(const std::string& columnName);
-    boost::optional<boost::gregorian::date> getDateByIndex(int32_t columnIndex);
-    boost::optional<boost::gregorian::date> getDate(const std::string& columnName);
+    iotdb::Optional<std::string> getStringByIndex(int32_t columnIndex);
+    iotdb::Optional<std::string> getString(const std::string& columnName);
+    iotdb::Optional<int64_t> getTimestampByIndex(int32_t columnIndex);
+    iotdb::Optional<int64_t> getTimestamp(const std::string& columnName);
+    iotdb::Optional<iotdb::Date> getDateByIndex(int32_t columnIndex);
+    iotdb::Optional<iotdb::Date> getDate(const std::string& columnName);
 
     TSDataType::TSDataType getDataTypeByIndex(int32_t columnIndex);
     TSDataType::TSDataType getDataType(const std::string& columnName);
@@ -113,16 +114,16 @@ private:
     int32_t getTsBlockColumnIndexForColumnIndex(int32_t columnIndex);
     void checkRecord();
     TSDataType::TSDataType getDataTypeByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
-    boost::optional<bool> getBooleanByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
+    iotdb::Optional<bool> getBooleanByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
     std::string getStringByTsBlockColumnIndexAndDataType(int32_t index, TSDataType::TSDataType tsDataType);
-    boost::optional<double> getDoubleByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
-    boost::optional<float> getFloatByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
-    boost::optional<int32_t> getIntByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
-    boost::optional<int64_t> getLongByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
+    iotdb::Optional<double> getDoubleByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
+    iotdb::Optional<float> getFloatByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
+    iotdb::Optional<int32_t> getIntByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
+    iotdb::Optional<int64_t> getLongByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
     std::shared_ptr<Binary> getBinaryByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
-    boost::optional<std::string> getStringByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
-    boost::optional<boost::gregorian::date> getDateByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
-    boost::optional<int64_t> getTimestampByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
+    iotdb::Optional<std::string> getStringByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
+    iotdb::Optional<iotdb::Date> getDateByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
+    iotdb::Optional<int64_t> getTimestampByTsBlockColumnIndex(int32_t tsBlockColumnIndex);
 
     std::string sql_;
     bool isClosed_;

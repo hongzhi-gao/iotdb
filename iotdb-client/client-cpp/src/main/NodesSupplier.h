@@ -21,7 +21,6 @@
 
 #include <vector>
 #include <atomic>
-#include <boost/optional.hpp>
 #include <mutex>
 #include <chrono>
 #include <thread>
@@ -30,8 +29,7 @@
 #include <algorithm>
 
 #include "ThriftConnection.h"
-
-class TEndPoint;
+#include "Optional.h"
 
 class RoundRobinPolicy {
 public:
@@ -41,7 +39,7 @@ public:
 class INodesSupplier {
 public:
     virtual ~INodesSupplier() = default;
-    virtual boost::optional<TEndPoint> getQueryEndPoint() = 0;
+    virtual iotdb::Optional<TEndPoint> getQueryEndPoint() = 0;
     virtual std::vector<TEndPoint> getEndPointList() = 0;
     using NodeSelectionPolicy = std::function<TEndPoint(const std::vector<TEndPoint>&)>;
 };
@@ -51,7 +49,7 @@ public:
     explicit StaticNodesSupplier(const std::vector<TEndPoint>& nodes, 
                                 NodeSelectionPolicy policy = RoundRobinPolicy::select);
 
-    boost::optional<TEndPoint> getQueryEndPoint() override;
+    iotdb::Optional<TEndPoint> getQueryEndPoint() override;
 
     std::vector<TEndPoint> getEndPointList() override;
 
@@ -110,7 +108,7 @@ public:
 
     std::vector<TEndPoint> getEndPointList() override;
 
-    boost::optional<TEndPoint> getQueryEndPoint() override;
+    iotdb::Optional<TEndPoint> getQueryEndPoint() override;
 
     ~NodesSupplier() override;
 

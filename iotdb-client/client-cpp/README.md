@@ -96,10 +96,31 @@ After run verify
 
 `mvn clean verify -P with-cpp -pl iotdb-client/client-cpp -am`
 
+## Prebuilt Windows SDK packages (MSVC toolset)
+
+CI can produce **one zip per MSVC toolset** (x64, Release, `/MD`), so end users pick the archive that matches the **Platform Toolset** of their Visual Studio project.
+
+| Zip name contains | Typical Visual Studio | Platform toolset |
+|-------------------|----------------------|------------------|
+| `msvc142` | Visual Studio 2019 | v142 |
+| `msvc143` | Visual Studio 2022 | v143 |
+
+How to see your toolset in Visual Studio: **Project → Properties → General → Platform Toolset**.
+
+Install the matching **Microsoft Visual C++ Redistributable** for the runtime your toolchain uses (see [Latest supported VC++ Redistributable downloads](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)).
+
+To build the same artifacts locally (after installing Boost and OpenSSL as for a normal Windows build):
+
+```text
+mvn clean package -P with-cpp,sdk-msvc-v142 -pl iotdb-client/client-cpp -am -Dctest.skip.tests=true
+mvn clean package -P with-cpp,sdk-msvc-v143 -pl iotdb-client/client-cpp -am -Dctest.skip.tests=true
+```
+
 ## Package Hierarchy
 
 If the compilation finishes successfully, the packaged zip file will be placed under
-"client-cpp/target/client-cpp-${project.version}-cpp-${os}.zip". 
+`iotdb-client/client-cpp/target/`, for example `client-cpp-<version>-cpp-windows-x86_64.zip`, or
+`client-cpp-<version>-cpp-windows-x86_64-msvc142.zip` when built with `-P sdk-msvc-v142` (see **Prebuilt Windows SDK packages** above).
 
 On macOS, the hierarchy of the package should look like this:
 ```

@@ -61,6 +61,8 @@
         <argLine/>
         <awaitility.version>4.2.0</awaitility.version>
         <boost.include.dir/>
+        <!-- Suffix for C++ SDK assembly classifier, e.g. -msvc142 when using -P sdk-msvc-v142 (Windows SDK matrix builds) -->
+        <cpp.sdk.suffix/>
         <bouncycastle.version>1.81</bouncycastle.version>
         <!-- This was the last version to support Java 8 -->
         <caffeine.version>2.9.3</caffeine.version>

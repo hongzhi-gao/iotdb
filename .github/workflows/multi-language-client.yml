@@ -109,6 +109,45 @@ jobs:
           path: distribution/target/apache-iotdb-*-all-bin/apache-iotdb-*-all-bin/logs
           retention-days: 1
 
+  # Scheme C: one prebuilt C++ SDK zip per MSVC toolset (x64 Release); see iotdb-client/client-cpp/README.md
+  cpp-windows-sdk:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - toolset: v142
+            boost_pkg: boost-msvc-14.2
+          - toolset: v143
+            boost_pkg: boost-msvc-14.3
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install CPP Dependencies (Windows)
+        run: |
+          choco install winflexbison3 -y
+          choco install ${{ matrix.boost_pkg }} -y
+          $boost_path = (Get-ChildItem -Path 'C:\local\' -Filter 'boost_*').FullName
+          echo $boost_path >> $env:GITHUB_PATH
+          choco install openssl -y
+          $sslPath = (Get-ChildItem 'C:\Program Files\OpenSSL*' -Directory | Select-Object -First 1).FullName
+          echo "$sslPath\bin" >> $env:GITHUB_PATH
+          echo "OPENSSL_ROOT_DIR=$sslPath" >> $env:GITHUB_ENV
+      - name: Cache Maven packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-sdk-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-m2-
+      - name: Package C++ client SDK (no integration tests)
+        shell: bash
+        run: ./mvnw clean package -P with-cpp,sdk-msvc-${{ matrix.toolset }} -pl iotdb-client/client-cpp -am -Dctest.skip.tests=true
+      - name: Upload C++ SDK zip
+        uses: actions/upload-artifact@v6
+        with:
+          name: cpp-sdk-windows-x64-${{ matrix.toolset }}
+          path: iotdb-client/client-cpp/target/*.zip
+          if-no-files-found: error
+
   go:
     runs-on: ubuntu-latest
 

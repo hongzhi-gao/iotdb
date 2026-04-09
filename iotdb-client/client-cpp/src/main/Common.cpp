@@ -18,43 +18,56 @@
  */
 
 #include "Common.h"
-#include <boost/date_time/gregorian/gregorian.hpp>
+#include <cstdio>
 
-int32_t parseDateExpressionToInt(const boost::gregorian::date& date) {
-    if (date.is_not_a_date()) {
+namespace iotdb {
+
+std::string dateToIsoExtendedString(const Date& date) {
+    if (date.isNotADate()) {
+        return std::string();
+    }
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%04d-%02d-%02d", date.year, date.month, date.day);
+    return std::string(buf);
+}
+
+}  // namespace iotdb
+
+int32_t parseDateExpressionToInt(const Date& date) {
+    if (date.isNotADate()) {
         throw IoTDBException("Date expression is null or empty.");
     }
 
-    const int year = date.year();
+    const int year = date.year;
     if (year < 1000 || year > 9999) {
         throw DateTimeParseException(
             "Year must be between 1000 and 9999.",
-            boost::gregorian::to_iso_extended_string(date),
+            iotdb::dateToIsoExtendedString(date),
             0
         );
     }
 
     const int64_t result = static_cast<int64_t>(year) * 10000 +
-        date.month() * 100 +
-        date.day();
+        date.month * 100 +
+        date.day;
     if (result > INT32_MAX || result < INT32_MIN) {
         throw DateTimeParseException(
             "Date value overflow. ",
-            boost::gregorian::to_iso_extended_string(date),
+            iotdb::dateToIsoExtendedString(date),
             0
         );
     }
     return static_cast<int32_t>(result);
 }
 
-boost::gregorian::date parseIntToDate(int32_t dateInt) {
+Date parseIntToDate(int32_t dateInt) {
     if (dateInt == EMPTY_DATE_INT) {
-        return boost::gregorian::date(boost::date_time::not_a_date_time);
+        return Date::not_a_date();
     }
     int year = dateInt / 10000;
     int month = (dateInt % 10000) / 100;
     int day = dateInt % 100;
-    return boost::gregorian::date(year, month, day);
+    return Date(year, month, day);
 }
 
 std::string getTimePrecision(int32_t timeFactor) {
@@ -254,7 +267,7 @@ int MyStringBuffer::getInt() {
     return *(int*)getOrderedByte(4);
 }
 
-boost::gregorian::date MyStringBuffer::getDate() {
+Date MyStringBuffer::getDate() {
     return parseIntToDate(getInt());
 }
 
@@ -311,7 +324,7 @@ void MyStringBuffer::putInt(int ins) {
     putOrderedByte((char*)&ins, 4);
 }
 
-void MyStringBuffer::putDate(boost::gregorian::date date) {
+void MyStringBuffer::putDate(const Date& date) {
     putInt(parseDateExpressionToInt(date));
 }
 

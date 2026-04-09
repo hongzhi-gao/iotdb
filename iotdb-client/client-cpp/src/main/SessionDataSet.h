@@ -24,7 +24,6 @@
 #include <string>
 #include <vector>
 #include <map>
-#include <boost/date_time/gregorian/gregorian.hpp>
 #include "IoTDBRpcDataSet.h"
 #include "Column.h"
 
@@ -104,29 +103,29 @@ public:
         bool isNull(const std::string& columnName);
         bool isNullByIndex(int32_t columnIndex);
 
-        boost::optional<bool> getBooleanByIndex(int32_t columnIndex);
-        boost::optional<bool> getBoolean(const std::string& columnName);
+        iotdb::Optional<bool> getBooleanByIndex(int32_t columnIndex);
+        iotdb::Optional<bool> getBoolean(const std::string& columnName);
 
-        boost::optional<double> getDoubleByIndex(int32_t columnIndex);
-        boost::optional<double> getDouble(const std::string& columnName);
+        iotdb::Optional<double> getDoubleByIndex(int32_t columnIndex);
+        iotdb::Optional<double> getDouble(const std::string& columnName);
 
-        boost::optional<float> getFloatByIndex(int32_t columnIndex);
-        boost::optional<float> getFloat(const std::string& columnName);
+        iotdb::Optional<float> getFloatByIndex(int32_t columnIndex);
+        iotdb::Optional<float> getFloat(const std::string& columnName);
 
-        boost::optional<int32_t> getIntByIndex(int32_t columnIndex);
-        boost::optional<int32_t> getInt(const std::string& columnName);
+        iotdb::Optional<int32_t> getIntByIndex(int32_t columnIndex);
+        iotdb::Optional<int32_t> getInt(const std::string& columnName);
 
-        boost::optional<int64_t> getLongByIndex(int32_t columnIndex);
-        boost::optional<int64_t> getLong(const std::string& columnName);
+        iotdb::Optional<int64_t> getLongByIndex(int32_t columnIndex);
+        iotdb::Optional<int64_t> getLong(const std::string& columnName);
 
-        boost::optional<std::string> getStringByIndex(int32_t columnIndex);
-        boost::optional<std::string> getString(const std::string& columnName);
+        iotdb::Optional<std::string> getStringByIndex(int32_t columnIndex);
+        iotdb::Optional<std::string> getString(const std::string& columnName);
 
-        boost::optional<int64_t> getTimestampByIndex(int32_t columnIndex);
-        boost::optional<int64_t> getTimestamp(const std::string& columnName);
+        iotdb::Optional<int64_t> getTimestampByIndex(int32_t columnIndex);
+        iotdb::Optional<int64_t> getTimestamp(const std::string& columnName);
 
-        boost::optional<boost::gregorian::date> getDateByIndex(int32_t columnIndex);
-        boost::optional<boost::gregorian::date> getDate(const std::string& columnName);
+        iotdb::Optional<iotdb::Date> getDateByIndex(int32_t columnIndex);
+        iotdb::Optional<iotdb::Date> getDate(const std::string& columnName);
 
         int32_t findColumn(const std::string& columnName);
         const std::vector<std::string>& getColumnNames() const;

@@ -28,10 +28,10 @@
 #include <thrift/transport/TSocket.h>
 #include <thrift/transport/TTransportException.h>
 #include <thrift/transport/TBufferTransports.h>
-#include <boost/date_time/gregorian/gregorian.hpp>
 #include <cstdint>
-#include <boost/optional/optional.hpp>
 
+#include "Date.h"
+#include "Optional.h"
 #include "client_types.h"
 #include "common_types.h"
 
@@ -48,10 +48,14 @@ using ::apache::thrift::TException;
 
 using namespace std;
 
+using iotdb::Date;
+using iotdb::Optional;
+using iotdb::nullopt;
+
 constexpr int32_t EMPTY_DATE_INT = 10000101;
 
-int32_t parseDateExpressionToInt(const boost::gregorian::date& date);
-boost::gregorian::date parseIntToDate(int32_t dateInt);
+int32_t parseDateExpressionToInt(const Date& date);
+Date parseIntToDate(int32_t dateInt);
 
 std::string getTimePrecision(int32_t timeFactor);
 
@@ -180,13 +184,13 @@ enum TSStatusCode {
 class Field {
 public:
     TSDataType::TSDataType dataType = TSDataType::UNKNOWN;
-    boost::optional<bool> boolV;
-    boost::optional<int> intV;
-    boost::optional<boost::gregorian::date> dateV;
-    boost::optional<int64_t> longV;
-    boost::optional<float> floatV;
-    boost::optional<double> doubleV;
-    boost::optional<std::string> stringV;
+    Optional<bool> boolV;
+    Optional<int> intV;
+    Optional<Date> dateV;
+    Optional<int64_t> longV;
+    Optional<float> floatV;
+    Optional<double> doubleV;
+    Optional<std::string> stringV;
 
     explicit Field(TSDataType::TSDataType a) {
         dataType = a;
@@ -210,7 +214,7 @@ public:
     void clear();
     bool hasRemaining();
     int getInt();
-    boost::gregorian::date getDate();
+    Date getDate();
     int64_t getInt64();
     float getFloat();
     double getDouble();
@@ -219,7 +223,7 @@ public:
     std::string getString();
 
     void putInt(int ins);
-    void putDate(boost::gregorian::date date);
+    void putDate(const Date& date);
     void putInt64(int64_t ins);
     void putFloat(float ins);
     void putDouble(double ins);

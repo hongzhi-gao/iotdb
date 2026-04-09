@@ -19,7 +19,6 @@
 
 #include "SessionDataSet.h"
 #include <stdexcept>
-#include <boost/date_time/gregorian/gregorian.hpp>
 
 RowRecord::RowRecord(int64_t timestamp) {
     this->timestamp = timestamp;
@@ -71,7 +70,7 @@ std::string RowRecord::toString() {
             if (!fields[i].dateV.is_initialized()) {
                 ret.append("null");
             } else {
-                ret.append(boost::gregorian::to_iso_extended_string(fields[i].dateV.value()));
+                ret.append(iotdb::dateToIsoExtendedString(fields[i].dateV.value()));
             }
             break;
         case TSDataType::TIMESTAMP:
@@ -162,67 +161,67 @@ bool SessionDataSet::DataIterator::isNullByIndex(int32_t columnIndex) {
     return iotdbRpcDataSet_->isNullByIndex(columnIndex);
 }
 
-boost::optional<bool> SessionDataSet::DataIterator::getBooleanByIndex(int32_t columnIndex) {
+iotdb::Optional<bool> SessionDataSet::DataIterator::getBooleanByIndex(int32_t columnIndex) {
     return iotdbRpcDataSet_->getBooleanByIndex(columnIndex);
 }
 
-boost::optional<bool> SessionDataSet::DataIterator::getBoolean(const std::string& columnName) {
+iotdb::Optional<bool> SessionDataSet::DataIterator::getBoolean(const std::string& columnName) {
     return iotdbRpcDataSet_->getBoolean(columnName);
 }
 
-boost::optional<double> SessionDataSet::DataIterator::getDoubleByIndex(int32_t columnIndex) {
+iotdb::Optional<double> SessionDataSet::DataIterator::getDoubleByIndex(int32_t columnIndex) {
     return iotdbRpcDataSet_->getDoubleByIndex(columnIndex);
 }
 
-boost::optional<double> SessionDataSet::DataIterator::getDouble(const std::string& columnName) {
+iotdb::Optional<double> SessionDataSet::DataIterator::getDouble(const std::string& columnName) {
     return iotdbRpcDataSet_->getDouble(columnName);
 }
 
-boost::optional<float> SessionDataSet::DataIterator::getFloatByIndex(int32_t columnIndex) {
+iotdb::Optional<float> SessionDataSet::DataIterator::getFloatByIndex(int32_t columnIndex) {
     return iotdbRpcDataSet_->getFloatByIndex(columnIndex);
 }
 
-boost::optional<float> SessionDataSet::DataIterator::getFloat(const std::string& columnName) {
+iotdb::Optional<float> SessionDataSet::DataIterator::getFloat(const std::string& columnName) {
     return iotdbRpcDataSet_->getFloat(columnName);
 }
 
-boost::optional<int32_t> SessionDataSet::DataIterator::getIntByIndex(int32_t columnIndex) {
+iotdb::Optional<int32_t> SessionDataSet::DataIterator::getIntByIndex(int32_t columnIndex) {
     return iotdbRpcDataSet_->getIntByIndex(columnIndex);
 }
 
-boost::optional<int32_t> SessionDataSet::DataIterator::getInt(const std::string& columnName) {
+iotdb::Optional<int32_t> SessionDataSet::DataIterator::getInt(const std::string& columnName) {
     return iotdbRpcDataSet_->getInt(columnName);
 }
 
-boost::optional<int64_t> SessionDataSet::DataIterator::getLongByIndex(int32_t columnIndex) {
+iotdb::Optional<int64_t> SessionDataSet::DataIterator::getLongByIndex(int32_t columnIndex) {
     return iotdbRpcDataSet_->getLongByIndex(columnIndex);
 }
 
-boost::optional<int64_t> SessionDataSet::DataIterator::getLong(const std::string& columnName) {
+iotdb::Optional<int64_t> SessionDataSet::DataIterator::getLong(const std::string& columnName) {
     return iotdbRpcDataSet_->getLong(columnName);
 }
 
-boost::optional<std::string> SessionDataSet::DataIterator::getStringByIndex(int32_t columnIndex) {
+iotdb::Optional<std::string> SessionDataSet::DataIterator::getStringByIndex(int32_t columnIndex) {
     return iotdbRpcDataSet_->getStringByIndex(columnIndex);
 }
 
-boost::optional<std::string> SessionDataSet::DataIterator::getString(const std::string& columnName) {
+iotdb::Optional<std::string> SessionDataSet::DataIterator::getString(const std::string& columnName) {
     return iotdbRpcDataSet_->getString(columnName);
 }
 
-boost::optional<int64_t> SessionDataSet::DataIterator::getTimestampByIndex(int32_t columnIndex) {
+iotdb::Optional<int64_t> SessionDataSet::DataIterator::getTimestampByIndex(int32_t columnIndex) {
     return iotdbRpcDataSet_->getTimestampByIndex(columnIndex);
 }
 
-boost::optional<int64_t> SessionDataSet::DataIterator::getTimestamp(const std::string& columnName) {
+iotdb::Optional<int64_t> SessionDataSet::DataIterator::getTimestamp(const std::string& columnName) {
     return iotdbRpcDataSet_->getTimestamp(columnName);
 }
 
-boost::optional<boost::gregorian::date> SessionDataSet::DataIterator::getDateByIndex(int32_t columnIndex) {
+iotdb::Optional<iotdb::Date> SessionDataSet::DataIterator::getDateByIndex(int32_t columnIndex) {
     return iotdbRpcDataSet_->getDateByIndex(columnIndex);
 }
 
-boost::optional<boost::gregorian::date> SessionDataSet::DataIterator::getDate(const std::string& columnName) {
+iotdb::Optional<iotdb::Date> SessionDataSet::DataIterator::getDate(const std::string& columnName) {
     return iotdbRpcDataSet_->getDate(columnName);
 }
 

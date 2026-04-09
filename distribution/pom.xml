@@ -170,7 +170,7 @@
                                     <fileSets>
                                         <fileSet>
                                             <includes combine.children="append">
-                                                <include>apache-iotdb-${project.version}-client-cpp-${os.classifier}-bin.zip</include>
+                                                <include>apache-iotdb-${project.version}-client-cpp-${os.classifier}${cpp.sdk.suffix}-bin.zip</include>
                                             </includes>
                                         </fileSet>
                                     </fileSets>

@@ -50,14 +50,14 @@ StaticNodesSupplier::StaticNodesSupplier(const std::vector<TEndPoint>& nodes,
                                        NodeSelectionPolicy policy)
     : availableNodes_(nodes), policy_(std::move(policy)) {}
 
-boost::optional<TEndPoint> StaticNodesSupplier::getQueryEndPoint() {
+iotdb::Optional<TEndPoint> StaticNodesSupplier::getQueryEndPoint() {
     try {
         if (availableNodes_.empty()) {
-            return boost::none;
+            return iotdb::nullopt;
         }
         return policy_(availableNodes_);
     } catch (const IoTDBException& e) {
-        return boost::none;
+        return iotdb::nullopt;
     }
 }
 
@@ -137,11 +137,11 @@ TEndPoint NodesSupplier::selectQueryEndpoint() {
     }
 }
 
-boost::optional<TEndPoint> NodesSupplier::getQueryEndPoint() {
+iotdb::Optional<TEndPoint> NodesSupplier::getQueryEndPoint() {
     try {
         return selectQueryEndpoint();
     } catch (const IoTDBException& e) {
-        return boost::none;
+        return iotdb::nullopt;
     }
 }
 

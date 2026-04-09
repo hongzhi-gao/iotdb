@@ -274,6 +274,7 @@
                         <phase>integration-test</phase>
                         <configuration>
                             <projectDirectory>${project.build.directory}/build/test</projectDirectory>
+                            <config>${cmake.build.type}</config>
                             <skipTests>${maven.test.skip}</skipTests>
                         </configuration>
                     </execution>
@@ -419,6 +420,105 @@
                 <iotdb.stop.script>windows/stop-standalone.bat</iotdb.stop.script>
                 <os.suffix>win</os.suffix>
             </properties>
+        </profile>
+        <!-- Visual Studio: target x64 (scheme C / CI); use with sdk-msvc-v* for toolset-specific SDK zips -->
+        <profile>
+            <id>client-cpp-windows-cmake</id>
+            <activation>
+                <os>
+                    <family>windows</family>
+                </os>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>io.github.cmake-maven-plugin</groupId>
+                        <artifactId>cmake-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>cmake-generate</id>
+                                <configuration>
+                                    <options combine.children="append">
+                                        <option>-DCMAKE_GENERATOR_PLATFORM=x64</option>
+                                    </options>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>cmake-generate-test</id>
+                                <configuration>
+                                    <options combine.children="append">
+                                        <option>-DCMAKE_GENERATOR_PLATFORM=x64</option>
+                                    </options>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>sdk-msvc-v142</id>
+            <properties>
+                <cpp.sdk.suffix>-msvc142</cpp.sdk.suffix>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>io.github.cmake-maven-plugin</groupId>
+                        <artifactId>cmake-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>cmake-generate</id>
+                                <configuration>
+                                    <options combine.children="append">
+                                        <option>-DCMAKE_GENERATOR_TOOLSET=v142</option>
+                                    </options>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>cmake-generate-test</id>
+                                <configuration>
+                                    <options combine.children="append">
+                                        <option>-DCMAKE_GENERATOR_TOOLSET=v142</option>
+                                    </options>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>sdk-msvc-v143</id>
+            <properties>
+                <cpp.sdk.suffix>-msvc143</cpp.sdk.suffix>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>io.github.cmake-maven-plugin</groupId>
+                        <artifactId>cmake-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>cmake-generate</id>
+                                <configuration>
+                                    <options combine.children="append">
+                                        <option>-DCMAKE_GENERATOR_TOOLSET=v143</option>
+                                    </options>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>cmake-generate-test</id>
+                                <configuration>
+                                    <options combine.children="append">
+                                        <option>-DCMAKE_GENERATOR_TOOLSET=v143</option>
+                                    </options>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
         </profile>
         <profile>
             <id>.skipTests</id>

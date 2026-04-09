@@ -73,7 +73,7 @@ void Tablet::createColumns() {
             values[i] = new bool[maxRowNumber];
             break;
         case TSDataType::DATE:
-            values[i] = new boost::gregorian::date[maxRowNumber];
+            values[i] = new Date[maxRowNumber];
             break;
         case TSDataType::INT32:
             values[i] = new int[maxRowNumber];
@@ -116,7 +116,7 @@ void Tablet::deleteColumns() {
             break;
         }
         case TSDataType::DATE: {
-            boost::gregorian::date* valueBuf = (boost::gregorian::date*)(values[i]);
+            Date* valueBuf = (Date*)(values[i]);
             delete[] valueBuf;
             break;
         }
@@ -176,9 +176,9 @@ void Tablet::deepCopyTabletColValue(void* const* srcPtr, void** destPtr, TSDataT
         memcpy(*destPtr, src, maxRowNumber * sizeof(double));
         break;
     case TSDataType::DATE: {
-        *destPtr = new boost::gregorian::date[maxRowNumber];
-        boost::gregorian::date* srcDate = static_cast<boost::gregorian::date*>(src);
-        boost::gregorian::date* destDate = static_cast<boost::gregorian::date*>(*destPtr);
+        *destPtr = new Date[maxRowNumber];
+        Date* srcDate = static_cast<Date*>(src);
+        Date* destDate = static_cast<Date*>(*destPtr);
         for (size_t j = 0; j < maxRowNumber; ++j) {
             destDate[j] = srcDate[j];
         }
@@ -317,7 +317,7 @@ string SessionUtils::getValue(const Tablet& tablet) {
             break;
         }
         case TSDataType::DATE: {
-            boost::gregorian::date* valueBuf = (boost::gregorian::date*)(tablet.values[i]);
+            Date* valueBuf = (Date*)(tablet.values[i]);
             for (size_t index = 0; index < tablet.rowSize; index++) {
                 if (!bitMap.isMarked(index)) {
                     valueBuffer.putDate(valueBuf[index]);
@@ -571,7 +571,7 @@ void Session::sortTablet(Tablet& tablet) {
             break;
         }
         case TSDataType::DATE: {
-            sortValuesList((boost::gregorian::date*)(tablet.values[i]), index, tablet.rowSize);
+            sortValuesList((Date*)(tablet.values[i]), index, tablet.rowSize);
             break;
         }
         case TSDataType::TIMESTAMP:
@@ -647,7 +647,7 @@ Session::putValuesIntoBuffer(const vector<TSDataType::TSDataType>& types, const 
             appendValues(buf, values[i], sizeof(int32_t));
             break;
         case TSDataType::DATE:
-            date = parseDateExpressionToInt(*(boost::gregorian::date*)values[i]);
+            date = parseDateExpressionToInt(*(Date*)values[i]);
             appendValues(buf, (char*)&date, sizeof(int32_t));
             break;
         case TSDataType::TIMESTAMP:
@@ -1456,7 +1456,7 @@ void Session::insertRelationalTablet(Tablet& tablet, bool sorted) {
                     break;
                 case TSDataType::DATE: {
                     currentTablet.addValue(tablet.schemas[col].first, rowIndex,
-                        *(boost::gregorian::date*)tablet.getValue(col, row, tablet.schemas[col].second));
+                        *(Date*)tablet.getValue(col, row, tablet.schemas[col].second));
                     break;
                 }
                 case TSDataType::STRING:

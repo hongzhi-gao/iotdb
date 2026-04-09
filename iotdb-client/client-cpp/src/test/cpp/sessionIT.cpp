@@ -244,7 +244,7 @@ TEST_CASE("Test insertRecord with new datatypes ", "[testTypedInsertRecordNewDat
     string deviceId = "root.test.d1";
     vector<string> measurements = {"s1", "s2", "s3", "s4"};
     int64_t value1 = 20250507;
-    boost::gregorian::date value2 = boost::gregorian::date(2025, 5, 7);
+    Date value2 = Date(2025, 5, 7);
     string value3 = "20250507";
     string value4 = "20250507";
 
@@ -468,7 +468,7 @@ TEST_CASE("Test insertTablet multi datatype", "[testInsertTabletMultiDatatype]")
     }
 
     int64_t s1Value = 20250507;
-    boost::gregorian::date s2Value(2025, 5, 7);
+    Date s2Value(2025, 5, 7);
     std::string s3Value("20250507");
     std::string s4Value("20250507");
 
@@ -801,21 +801,16 @@ TEST_CASE("Test executeLastDataQuery ", "[testExecuteLastDataQuery]") {
     REQUIRE(sessionDataSet->hasNext() == false);
 }
 
-// Helper function for comparing TEndPoint with detailed error message
+// Helper function for comparing TEndPoint (avoid Catch AssertionHandler API / ostream quirks on MSVC)
 void assertTEndPointEqual(const TEndPoint& actual,
                          const std::string& expectedIp,
                          int expectedPort,
                          const char* file,
                          int line) {
-    if (actual.ip != expectedIp || actual.port != expectedPort) {
-        std::stringstream ss;
-        ss << "\nTEndPoint mismatch:\nExpected: " << expectedIp << ":" << expectedPort
-           << "\nActual:   " << actual.ip << ":" << actual.port;
-        Catch::SourceLineInfo location(file, line);
-        Catch::AssertionHandler handler("TEndPoint comparison", location, ss.str(), Catch::ResultDisposition::Normal);
-        handler.handleMessage(Catch::ResultWas::ExplicitFailure, ss.str());
-        handler.complete();
-    }
+    (void)file;
+    (void)line;
+    REQUIRE(actual.ip == expectedIp);
+    REQUIRE(actual.port == expectedPort);
 }
 
 // Macro to simplify test assertions

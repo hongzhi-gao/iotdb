@@ -32,7 +32,6 @@
 #include <stdexcept>
 #include <cstdlib>
 #include <future>
-#include <boost/date_time/gregorian/gregorian.hpp>
 #include <thrift/protocol/TBinaryProtocol.h>
 #include <thrift/protocol/TCompactProtocol.h>
 #include <thrift/transport/TSocket.h>
@@ -295,7 +294,7 @@ public:
             break;
         }
         case TSDataType::DATE: {
-            safe_cast<T, boost::gregorian::date>(value, ((boost::gregorian::date*)values[schemaId])[rowIndex]);
+            safe_cast<T, Date>(value, ((Date*)values[schemaId])[rowIndex]);
             break;
         }
         case TSDataType::TIMESTAMP:
@@ -399,7 +398,7 @@ public:
         case TSDataType::INT32:
             return &(reinterpret_cast<int32_t*>(values[schemaId])[rowIndex]);
         case TSDataType::DATE:
-            return &(reinterpret_cast<boost::gregorian::date*>(values[schemaId])[rowIndex]);
+            return &(reinterpret_cast<Date*>(values[schemaId])[rowIndex]);
         case TSDataType::TIMESTAMP:
         case TSDataType::INT64:
             return &(reinterpret_cast<int64_t*>(values[schemaId])[rowIndex]);
