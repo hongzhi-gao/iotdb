@@ -1,17 +1,16 @@
+# Manual run; Release published; v* tag pushes; rc/** pushes only when C++-related paths change
+# (job should-package). release events use the workflow file from the default branch.
 name: C++ Client package
 
 on:
   workflow_dispatch:
+  release:
+    types: [published]
   push:
     branches:
       - "rc/**"
     tags:
-      - "*"
-    paths:
-      - "pom.xml"
-      - "iotdb-client/**"
-      - "iotdb-protocol/**"
-      - ".github/workflows/client-cpp-package.yml"
+      - "v*"
 
 concurrency:
   group: client-cpp-package-${{ github.workflow }}-${{ github.ref }}
@@ -22,8 +21,51 @@ env:
   MAVEN_ARGS: --batch-mode --no-transfer-progress
 
 jobs:
+  should-package:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.result.outputs.run }}
+    steps:
+      - uses: actions/checkout@v5
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/rc/')
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/rc/')
+        with:
+          filters: |
+            cpp:
+              - 'pom.xml'
+              - 'iotdb-client/**'
+              - 'iotdb-protocol/**'
+              - '.github/workflows/client-cpp-package.yml'
+      - id: result
+        shell: bash
+        run: |
+          set -euo pipefail
+          E="${{ github.event_name }}"
+          R="${{ github.ref }}"
+          if [[ "$E" == "workflow_dispatch" ]] || [[ "$E" == "release" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$E" == "push" ]] && [[ "$R" == refs/tags/v* ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$E" == "push" ]] && [[ "$R" =~ ^refs/heads/rc/ ]]; then
+            if [[ "${{ steps.filter.outputs.cpp }}" == "true" ]]; then
+              echo "run=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "run=false" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          echo "run=false" >> "$GITHUB_OUTPUT"
+
   package-linux:
     name: Package (${{ matrix.name }})
+    needs: should-package
+    if: needs.should-package.outputs.run == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +111,8 @@ jobs:
 
   package-macos:
     name: Package (${{ matrix.name }})
+    needs: should-package
+    if: needs.should-package.outputs.run == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -115,6 +159,8 @@ jobs:
 
   package-windows:
     name: Package (${{ matrix.name }})
+    needs: should-package
+    if: needs.should-package.outputs.run == 'true'
     strategy:
       fail-fast: false
       matrix:
