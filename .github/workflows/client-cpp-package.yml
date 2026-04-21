@@ -165,11 +165,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: windows-vs2019
-            runs-on: windows-2019
-            boost_choco: boost-msvc-14.2
-            cmake_generator: Visual Studio 16 2019
-            iotdb_tools_thrift_version: 0.14.1.1-msvc142-SNAPSHOT
           - name: windows-vs2022
             runs-on: windows-2022
             boost_choco: boost-msvc-14.3
