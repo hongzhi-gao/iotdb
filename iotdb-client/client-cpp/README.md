@@ -96,6 +96,38 @@ After run verify
 
 `mvn clean verify -P with-cpp -pl iotdb-client/client-cpp -am`
 
+## Code Formatting
+
+We use `clang-format` as the only formatter for C++ code and trigger it through Maven Spotless.
+
+### Required version
+
+Use `clang-format 17.0.6` locally to keep behavior consistent with CI.
+
+### Install clang-format 17.0.6
+
+- Linux (Ubuntu): `sudo apt-get install -y clang-format-17`
+- macOS: `brew install llvm@17` and make sure `clang-format` from `llvm@17` is in `PATH`
+- Windows: `choco install llvm --version=17.0.6 -y`
+
+### Validate only (no changes)
+
+`./mvnw -P with-cpp -pl iotdb-client/client-cpp spotless:check`
+
+`./mvnw -P with-cpp -pl example/client-cpp-example spotless:check`
+
+### Auto-fix formatting
+
+`./mvnw -P with-cpp -pl iotdb-client/client-cpp spotless:apply`
+
+`./mvnw -P with-cpp -pl example/client-cpp-example spotless:apply`
+
+### Windows (PowerShell)
+
+PowerShell may treat a comma in `-pl` as an argument separator. Prefer the two commands above. If you need a single invocation, quote the whole `-pl` value, for example:
+
+`./mvnw -P with-cpp "-pl=iotdb-client/client-cpp,example/client-cpp-example" spotless:check`
+
 ## Package Hierarchy
 
 If the compilation finishes successfully, the packaged zip file will be placed under
