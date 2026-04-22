@@ -54,10 +54,18 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y libboost-all-dev
-          sudo apt-get install -y openssl libssl-dev clang-format-17
-          # Align default /usr/bin/clang-format with 17.x (Apache TsFile CI pattern; avoids Spotless picking 18.x)
+          sudo apt-get install -y libboost-all-dev openssl libssl-dev wget
+          # jammy (22.04): no clang-format-17 in default repos — use apt.llvm.org (same LLVM 17 as noble/choco/brew)
+          . /etc/os-release
+          if [[ "${VERSION_CODENAME}" == "jammy" ]]; then
+            wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+            chmod +x /tmp/llvm.sh
+            sudo DEBIAN_FRONTEND=noninteractive /tmp/llvm.sh 17
+          else
+            sudo apt-get install -y clang-format-17
+          fi
           sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-17 100
           sudo update-alternatives --set clang-format /usr/bin/clang-format-17
           clang-format --version

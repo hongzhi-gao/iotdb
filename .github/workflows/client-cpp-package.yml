@@ -87,7 +87,15 @@ jobs:
         run: |
           set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y libboost-all-dev openssl libssl-dev clang-format-17
+          sudo apt-get install -y libboost-all-dev openssl libssl-dev wget
+          . /etc/os-release
+          if [[ "${VERSION_CODENAME}" == "jammy" ]]; then
+            wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+            chmod +x /tmp/llvm.sh
+            sudo DEBIAN_FRONTEND=noninteractive /tmp/llvm.sh 17
+          else
+            sudo apt-get install -y clang-format-17
+          fi
           sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-17 100
           sudo update-alternatives --set clang-format /usr/bin/clang-format-17
           clang-format --version
