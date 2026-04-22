@@ -110,7 +110,7 @@ plugin](https://github.com/diffplug/spotless/tree/main/plugin-maven) together wi
 ### C++ formatting
 
 - Formatter: `clang-format` only
-- Version: `17.0.6` (must match CI)
+- Version: pinned as `clang.format.version` in the root `pom.xml` (currently `17.0.6`, aligned with Apache TsFile); CI installs LLVM/clang-format so the default `clang-format` on the runner matches that version
 - Entrypoint: Maven Spotless
 
 Check only:

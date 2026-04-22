@@ -88,7 +88,9 @@ jobs:
           set -euxo pipefail
           sudo apt-get update
           sudo apt-get install -y libboost-all-dev openssl libssl-dev clang-format-17
-          clang-format-17 --version
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-17 100
+          sudo update-alternatives --set clang-format /usr/bin/clang-format-17
+          clang-format --version
       - name: Cache Maven packages
         uses: actions/cache@v5
         with:
@@ -133,6 +135,7 @@ jobs:
         run: |
           set -euxo pipefail
           brew install boost openssl llvm@17
+          ln -sf "$(brew --prefix llvm@17)/bin/clang-format" "$(brew --prefix)/bin/clang-format"
           echo "$(brew --prefix llvm@17)/bin" >> "$GITHUB_PATH"
           clang-format --version
       - name: Cache Maven packages
@@ -193,7 +196,7 @@ jobs:
           $sslPath = (Get-ChildItem 'C:\Program Files\OpenSSL*' -Directory | Select-Object -First 1).FullName
           echo "$sslPath\bin" >> $env:GITHUB_PATH
           echo "OPENSSL_ROOT_DIR=$sslPath" >> $env:GITHUB_ENV
-          choco install llvm --version=17.0.6 -y
+          choco install llvm --version=17.0.6 --force -y
           clang-format --version
       - name: Cache Maven packages
         uses: actions/cache@v5

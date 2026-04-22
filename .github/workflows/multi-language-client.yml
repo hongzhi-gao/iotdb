@@ -57,7 +57,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libboost-all-dev
           sudo apt-get install -y openssl libssl-dev clang-format-17
-          clang-format-17 --version
+          # Align default /usr/bin/clang-format with 17.x (Apache TsFile CI pattern; avoids Spotless picking 18.x)
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-17 100
+          sudo update-alternatives --set clang-format /usr/bin/clang-format-17
+          clang-format --version
       - name: Install CPP Dependencies (Mac)
         # remove some xcode to release disk space
         if: runner.os == 'macOS'
@@ -65,6 +68,7 @@ jobs:
         run: |
           brew install boost
           brew install openssl llvm@17
+          ln -sf "$(brew --prefix llvm@17)/bin/clang-format" "$(brew --prefix)/bin/clang-format"
           echo "$(brew --prefix llvm@17)/bin" >> "$GITHUB_PATH"
           clang-format --version
           sudo rm -rf /Applications/Xcode_14.3.1.app
@@ -84,7 +88,7 @@ jobs:
           $sslPath = (Get-ChildItem 'C:\Program Files\OpenSSL*' -Directory | Select-Object -First 1).FullName
           echo "$sslPath\bin" >> $env:GITHUB_PATH
           echo "OPENSSL_ROOT_DIR=$sslPath" >> $env:GITHUB_ENV
-          choco install llvm --version=17.0.6 -y
+          choco install llvm --version=17.0.6 --force -y
           clang-format --version
       - name: Cache Maven packages
         uses: actions/cache@v5

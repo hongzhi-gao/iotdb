@@ -102,13 +102,19 @@ We use `clang-format` as the only formatter for C++ code and trigger it through 
 
 ### Required version
 
-Use `clang-format 17.0.6` locally to keep behavior consistent with CI.
+The version is pinned in the root `pom.xml` as property `clang.format.version` (same approach as Apache TsFile). Use **clang-format 17.0.6** locally so Spotless agrees with CI.
 
 ### Install clang-format 17.0.6
 
-- Linux (Ubuntu): `sudo apt-get install -y clang-format-17`
-- macOS: `brew install llvm@17` and make sure `clang-format` from `llvm@17` is in `PATH`
-- Windows: `choco install llvm --version=17.0.6 -y`
+- Linux (Ubuntu): `sudo apt-get install -y clang-format-17`, then point the default `clang-format` at 17.x (Spotless invokes `clang-format` on `PATH`, and Ubuntu may ship 18.x as the default):
+
+  `sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-17 100`
+
+  `sudo update-alternatives --set clang-format /usr/bin/clang-format-17`
+
+- macOS: `brew install llvm@17`, then e.g. `ln -sf "$(brew --prefix llvm@17)/bin/clang-format" "$(brew --prefix)/bin/clang-format"` and/or put `$(brew --prefix llvm@17)/bin` on your `PATH`.
+
+- Windows: `choco install llvm --version=17.0.6 --force -y` (CI uses `--force` like TsFile so the expected LLVM is selected).
 
 ### Validate only (no changes)
 
