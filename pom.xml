@@ -837,19 +837,7 @@
                             </importOrder>
                             <removeUnusedImports/>
                         </java>
-                        <cpp>
-                            <includes>
-                                <include>src/**/*.h</include>
-                                <include>src/**/*.hpp</include>
-                                <include>src/**/*.c</include>
-                                <include>src/**/*.cc</include>
-                                <include>src/**/*.cpp</include>
-                            </includes>
-                            <clangFormat>
-                                <version>${clang.format.version}</version>
-                                <style>file</style>
-                            </clangFormat>
-                        </cpp>
+                        <!-- C++ clang-format requires Spotless 2.44+ (see client-cpp / client-cpp-example poms). Not here: JDK8 CI uses Spotless 2.27.1 which cannot parse &lt;clangFormat&gt;. -->
                         <lineEndings>UNIX</lineEndings>
                     </configuration>
                     <executions>
