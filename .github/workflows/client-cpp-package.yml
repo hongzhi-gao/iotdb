@@ -93,6 +93,8 @@ jobs:
             wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
             chmod +x /tmp/llvm.sh
             sudo DEBIAN_FRONTEND=noninteractive /tmp/llvm.sh 17
+            # llvm.sh installs clang-17/lldb/lld/clangd but not the clang-format-17 package
+            sudo apt-get install -y clang-format-17
           else
             sudo apt-get install -y clang-format-17
           fi

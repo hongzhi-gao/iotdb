@@ -108,7 +108,7 @@ The version is pinned in the root `pom.xml` as property `clang.format.version` (
 
 ### Install clang-format 17.0.6
 
-- Linux (Ubuntu): On **24.04+**, `sudo apt-get install -y clang-format-17`. On **22.04**, that package is not in the default archive; install LLVM 17 via [apt.llvm.org](https://apt.llvm.org/) (e.g. download `llvm.sh` and run `sudo ./llvm.sh 17`, as CI does). Then point the default `clang-format` at 17.x (Spotless invokes `clang-format` on `PATH`; some releases default to another major version):
+- Linux (Ubuntu): On **24.04+**, `sudo apt-get install -y clang-format-17`. On **22.04**, that package is not in the default archive; add the LLVM 17 repo with [apt.llvm.org](https://apt.llvm.org/) (e.g. `sudo ./llvm.sh 17`, as CI does). The script installs `clang-17` and related tools but **not** the `clang-format-17` package, so also run `sudo apt-get install -y clang-format-17`. Then point the default `clang-format` at 17.x (Spotless invokes `clang-format` on `PATH`; some releases default to another major version):
 
   `sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-17 100`
 
