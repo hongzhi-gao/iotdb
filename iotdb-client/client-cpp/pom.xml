@@ -464,6 +464,9 @@
                                     <include>src/**/*.cc</include>
                                     <include>src/**/*.cpp</include>
                                 </includes>
+                                <excludes>
+                                    <exclude>src/test/catch2/**</exclude>
+                                </excludes>
                                 <clangFormat>
                                     <version>${clang.format.version}</version>
                                     <style>file</style>
