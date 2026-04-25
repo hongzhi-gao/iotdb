@@ -986,7 +986,7 @@ void Session::insertRecord(const string& deviceId, int64_t time, const vector<st
       } catch (RedirectException& e) {
       }
     } else {
-      throw e;
+      throw;
     }
   }
 }
@@ -1014,7 +1014,7 @@ void Session::insertRecord(const string& deviceId, int64_t time, const vector<st
       } catch (RedirectException& e) {
       }
     } else {
-      throw e;
+      throw;
     }
   }
 }
@@ -1040,7 +1040,7 @@ void Session::insertAlignedRecord(const string& deviceId, int64_t time,
       } catch (RedirectException& e) {
       }
     } else {
-      throw e;
+      throw;
     }
   }
 }
@@ -1069,7 +1069,7 @@ void Session::insertAlignedRecord(const string& deviceId, int64_t time,
       } catch (RedirectException& e) {
       }
     } else {
-      throw e;
+      throw;
     }
   }
 }
@@ -1080,7 +1080,7 @@ void Session::insertRecords(const vector<string>& deviceIds, const vector<int64_
   size_t len = deviceIds.size();
   if (len != times.size() || len != measurementsList.size() || len != valuesList.size()) {
     logic_error e("deviceIds, times, measurementsList and valuesList's size should be equal");
-    throw exception(e);
+    throw logic_error(e.what());
   }
 
   if (enableRedirection_) {
@@ -1106,7 +1106,7 @@ void Session::insertRecords(const vector<string>& deviceIds, const vector<int64_
   size_t len = deviceIds.size();
   if (len != times.size() || len != measurementsList.size() || len != valuesList.size()) {
     logic_error e("deviceIds, times, measurementsList and valuesList's size should be equal");
-    throw exception(e);
+    throw logic_error(e.what());
   }
 
   if (enableRedirection_) {
@@ -1137,7 +1137,7 @@ void Session::insertAlignedRecords(const vector<string>& deviceIds, const vector
   size_t len = deviceIds.size();
   if (len != times.size() || len != measurementsList.size() || len != valuesList.size()) {
     logic_error e("deviceIds, times, measurementsList and valuesList's size should be equal");
-    throw exception(e);
+    throw logic_error(e.what());
   }
 
   if (enableRedirection_) {
@@ -1163,7 +1163,7 @@ void Session::insertAlignedRecords(const vector<string>& deviceIds, const vector
   size_t len = deviceIds.size();
   if (len != times.size() || len != measurementsList.size() || len != valuesList.size()) {
     logic_error e("deviceIds, times, measurementsList and valuesList's size should be equal");
-    throw exception(e);
+    throw logic_error(e.what());
   }
 
   if (enableRedirection_) {
@@ -1237,7 +1237,7 @@ void Session::insertRecordsOfOneDevice(const string& deviceId, vector<int64_t>& 
       } catch (RedirectException& e) {
       }
     } else {
-      throw e;
+      throw;
     }
   }
 }
@@ -1291,7 +1291,7 @@ void Session::insertAlignedRecordsOfOneDevice(const string& deviceId, vector<int
       } catch (RedirectException& e) {
       }
     } else {
-      throw e;
+      throw;
     }
   }
 }
@@ -1301,8 +1301,7 @@ void Session::insertTablet(Tablet& tablet) {
     insertTablet(tablet, false);
   } catch (const exception& e) {
     log_debug(e.what());
-    logic_error error(e.what());
-    throw exception(error);
+    throw IoTDBException(e.what());
   }
 }
 
@@ -1343,7 +1342,7 @@ void Session::insertTablet(TSInsertTabletReq request) {
       } catch (RedirectException& e) {
       }
     } else {
-      throw e;
+      throw;
     }
   }
 }
@@ -1530,8 +1529,7 @@ void Session::insertAlignedTablet(Tablet& tablet, bool sorted) {
     insertTablet(tablet, sorted);
   } catch (const exception& e) {
     log_debug(e.what());
-    logic_error error(e.what());
-    throw exception(error);
+    throw IoTDBException(e.what());
   }
 }
 
@@ -1540,8 +1538,7 @@ void Session::insertTablets(unordered_map<string, Tablet*>& tablets) {
     insertTablets(tablets, false);
   } catch (const exception& e) {
     log_debug(e.what());
-    logic_error error(e.what());
-    throw exception(error);
+    throw IoTDBException(e.what());
   }
 }
 
@@ -1593,8 +1590,7 @@ void Session::insertAlignedTablets(unordered_map<string, Tablet*>& tablets, bool
     insertTablets(tablets, sorted);
   } catch (const exception& e) {
     log_debug(e.what());
-    logic_error error(e.what());
-    throw exception(error);
+    throw IoTDBException(e.what());
   }
 }
 
@@ -1653,7 +1649,7 @@ void Session::testInsertRecords(const vector<string>& deviceIds, const vector<in
   size_t len = deviceIds.size();
   if (len != times.size() || len != measurementsList.size() || len != valuesList.size()) {
     logic_error error("deviceIds, times, measurementsList and valuesList's size should be equal");
-    throw exception(error);
+    throw logic_error(error.what());
   }
   TSInsertStringRecordsReq request;
   request.__set_prefixPaths(deviceIds);
@@ -2019,7 +2015,7 @@ std::unique_ptr<SessionDataSet> Session::executeQueryStatementMayRedirect(const 
     }
   } catch (exception& e) {
     log_error("Exception while executing query statement: %s", e.what());
-    throw e;
+    throw;
   }
 }
 

@@ -307,3 +307,25 @@ TEST_CASE("C API Table - Dataset column info", "[c_table_datasetColumns][c_table
 
   ts_dataset_destroy(dataSet);
 }
+
+TEST_CASE("C API Table - Missing table error message", "[c_table_missingTable][c_table_error]") {
+  CaseReporter cr("c_table_missingTable");
+
+  ts_table_session_execute_non_query(g_table_session, "DROP DATABASE IF EXISTS c_db_missing");
+  REQUIRE(ts_table_session_execute_non_query(g_table_session, "CREATE DATABASE c_db_missing") ==
+          TS_OK);
+  REQUIRE(ts_table_session_execute_non_query(g_table_session, "USE \"c_db_missing\"") == TS_OK);
+
+  CSessionDataSet* dataSet = nullptr;
+  TsStatus status = ts_table_session_execute_query(g_table_session,
+                                                   "SELECT * FROM table_does_not_exist", &dataSet);
+  REQUIRE(status != TS_OK);
+  REQUIRE(dataSet == nullptr);
+
+  const char* err = ts_get_last_error();
+  REQUIRE(err != nullptr);
+  const std::string errMsg(err);
+  REQUIRE_FALSE(errMsg.empty());
+  REQUIRE(errMsg != "std::exception");
+  REQUIRE((errMsg.find("table") != std::string::npos || errMsg.find("550") != std::string::npos));
+}

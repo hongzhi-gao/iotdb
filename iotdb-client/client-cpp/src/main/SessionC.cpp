@@ -30,6 +30,7 @@
 #include <map>
 #include <unordered_map>
 #include <memory>
+#include <typeinfo>
 
 /* ============================================================
  *  Internal wrapper structs — the opaque handles point to these
@@ -60,9 +61,35 @@ struct CRowRecord_ {
  * ============================================================ */
 
 static thread_local std::string g_lastError;
+static const int32_t TABLE_NOT_EXISTS_STATUS_CODE = 550;
 
 static void clearError() {
   g_lastError.clear();
+}
+
+static std::string buildDetailedErrorMessage(const std::exception& e) {
+  std::string message = e.what() ? e.what() : "";
+
+#if defined(_CPPRTTI) || defined(__GXX_RTTI)
+  if (const auto* executionError = dynamic_cast<const ExecutionException*>(&e)) {
+    if (executionError->status.code == TABLE_NOT_EXISTS_STATUS_CODE) {
+      if (message.empty() || message == "std::exception") {
+        return "table does not exist (status code 550)";
+      }
+      return "table does not exist: " + message;
+    }
+  }
+#endif
+
+  if (message.empty() || message == "std::exception") {
+#if defined(_CPPRTTI) || defined(__GXX_RTTI)
+    return std::string("caught generic exception message from ") + typeid(e).name() +
+           ", possible reason: requested table does not exist";
+#else
+    return "caught generic exception message, possible reason: requested table does not exist";
+#endif
+  }
+  return message;
 }
 
 static TsStatus setError(TsStatus code, const std::string& msg) {
@@ -71,7 +98,7 @@ static TsStatus setError(TsStatus code, const std::string& msg) {
 }
 
 static TsStatus setError(TsStatus code, const std::exception& e) {
-  g_lastError = e.what();
+  g_lastError = buildDetailedErrorMessage(e);
   return code;
 }
 
