@@ -30,18 +30,17 @@ static int global_test_tag = 0;
 
 class CaseReporter {
 public:
-  CaseReporter(const char *caseNameArg) : caseName(caseNameArg) {
+  CaseReporter(const char* caseNameArg) : caseName(caseNameArg) {
     test_tag = global_test_tag++;
     std::cout << "Test " << test_tag << ": " << caseName << std::endl;
   }
 
   ~CaseReporter() {
-    std::cout << "Test " << test_tag << ": " << caseName << " Done" << std::endl
-              << std::endl;
+    std::cout << "Test " << test_tag << ": " << caseName << " Done" << std::endl << std::endl;
   }
 
 private:
-  const char *caseName;
+  const char* caseName;
   int test_tag;
 };
 
@@ -57,8 +56,7 @@ TEST_CASE("Create table success", "[createTable]") {
                                     "tag1 string tag,"
                                     "attr1 string attribute,"
                                     "m1 double field)");
-  unique_ptr<SessionDataSet> sessionDataSet =
-      session->executeQueryStatement("SHOW TABLES");
+  unique_ptr<SessionDataSet> sessionDataSet = session->executeQueryStatement("SHOW TABLES");
   sessionDataSet->setFetchSize(1024);
   bool tableExist = false;
   while (sessionDataSet->hasNext()) {
@@ -74,8 +72,7 @@ TEST_CASE("Test TableSession builder with nodeUrls", "[SessionBuilderInit]") {
   CaseReporter cr("TableSessionInitWithNodeUrls");
 
   std::vector<std::string> nodeUrls = {"127.0.0.1:6667"};
-  auto builder =
-      std::unique_ptr<TableSessionBuilder>(new TableSessionBuilder());
+  auto builder = std::unique_ptr<TableSessionBuilder>(new TableSessionBuilder());
   std::shared_ptr<TableSession> session = std::shared_ptr<TableSession>(
       builder->username("root")->password("root")->nodeUrls(nodeUrls)->build());
   session->open();
@@ -101,8 +98,8 @@ TEST_CASE("Test insertRelationalTablet", "[testInsertRelationalTablet]") {
   schemaList.push_back(make_pair("tag1", TSDataType::TEXT));
   schemaList.push_back(make_pair("attr1", TSDataType::TEXT));
   schemaList.push_back(make_pair("m1", TSDataType::DOUBLE));
-  vector<ColumnCategory> columnTypes = {
-      ColumnCategory::TAG, ColumnCategory::ATTRIBUTE, ColumnCategory::FIELD};
+  vector<ColumnCategory> columnTypes = {ColumnCategory::TAG, ColumnCategory::ATTRIBUTE,
+                                        ColumnCategory::FIELD};
 
   int64_t timestamp = 0;
   Tablet tablet("table1", schemaList, columnTypes, 15);
@@ -135,42 +132,36 @@ TEST_CASE("Test insertRelationalTablet", "[testInsertRelationalTablet]") {
       session->executeQueryStatement("SELECT * FROM table1 order by time");
   while (sessionDataSet->hasNext()) {
     auto rowRecord = sessionDataSet->next();
-    REQUIRE(rowRecord->fields[1].stringV.value() ==
-            string("tag:") + to_string(cnt));
-    REQUIRE(rowRecord->fields[2].stringV.value() ==
-            string("attr:") + to_string(cnt));
+    REQUIRE(rowRecord->fields[1].stringV.value() == string("tag:") + to_string(cnt));
+    REQUIRE(rowRecord->fields[2].stringV.value() == string("attr:") + to_string(cnt));
     REQUIRE(fabs(rowRecord->fields[3].doubleV.value() - cnt * 1.1) < 0.0001);
     cnt++;
   }
   REQUIRE(cnt == 15);
 }
 
-TEST_CASE("Query non-existent table returns detailed error",
-          "[queryMissingTableError]") {
+TEST_CASE("Query non-existent table returns detailed error", "[queryMissingTableError]") {
   CaseReporter cr("queryMissingTableError");
   session->executeNonQueryStatement("CREATE DATABASE IF NOT EXISTS db1");
   session->executeNonQueryStatement("USE db1");
-  session->executeNonQueryStatement(
-      "DROP TABLE IF EXISTS table_not_exists_for_query");
+  session->executeNonQueryStatement("DROP TABLE IF EXISTS table_not_exists_for_query");
 
   bool caught = false;
   try {
     session->executeQueryStatement("SELECT * FROM table_not_exists_for_query");
-  } catch (const std::exception &e) {
+  } catch (const std::exception& e) {
     caught = true;
     const std::string errorMessage = e.what();
     INFO("caught error message: " << errorMessage);
     const bool hasDetailedErrorMessage =
-        errorMessage.size() > 20 &&
-        errorMessage.find("std::exception") == std::string::npos;
+        errorMessage.size() > 20 && errorMessage.find("std::exception") == std::string::npos;
     REQUIRE(errorMessage != "std::exception");
     REQUIRE(hasDetailedErrorMessage);
   }
   REQUIRE(caught);
 }
 
-TEST_CASE("Test RelationalTabletTsblockRead",
-          "[testRelationalTabletTsblockRead]") {
+TEST_CASE("Test RelationalTabletTsblockRead", "[testRelationalTabletTsblockRead]") {
   CaseReporter cr("testRelationalTabletTsblockRead");
   session->executeNonQueryStatement("CREATE DATABASE IF NOT EXISTS db1");
   session->executeNonQueryStatement("USE db1");
@@ -257,29 +248,21 @@ TEST_CASE("Test RelationalTabletTsblockRead",
     } else {
       REQUIRE(dataIter.getLongByIndex(1).value() == timestamp + rowNum);
       REQUIRE(dataIter.getBooleanByIndex(2).value() == (rowNum % 2 == 0));
-      REQUIRE(dataIter.getIntByIndex(3).value() ==
-              static_cast<int32_t>(rowNum));
-      REQUIRE(dataIter.getLongByIndex(4).value() ==
-              static_cast<int64_t>(timestamp));
+      REQUIRE(dataIter.getIntByIndex(3).value() == static_cast<int32_t>(rowNum));
+      REQUIRE(dataIter.getLongByIndex(4).value() == static_cast<int64_t>(timestamp));
       REQUIRE(fabs(dataIter.getFloatByIndex(5).value() - rowNum * 1.1f) < 0.1f);
       REQUIRE(fabs(dataIter.getDoubleByIndex(6).value() - rowNum * 1.1f) < 0.1);
-      REQUIRE(dataIter.getStringByIndex(7).value() ==
-              "text_" + to_string(rowNum));
-      REQUIRE(dataIter.getTimestampByIndex(8).value() ==
-              static_cast<int64_t>(timestamp));
-      REQUIRE(dataIter.getDateByIndex(9).value() ==
-              boost::gregorian::date(2025, 5, 15));
-      REQUIRE(dataIter.getStringByIndex(10).value() ==
-              "blob_" + to_string(rowNum));
-      REQUIRE(dataIter.getStringByIndex(11).value() ==
-              "string_" + to_string(rowNum));
+      REQUIRE(dataIter.getStringByIndex(7).value() == "text_" + to_string(rowNum));
+      REQUIRE(dataIter.getTimestampByIndex(8).value() == static_cast<int64_t>(timestamp));
+      REQUIRE(dataIter.getDateByIndex(9).value() == boost::gregorian::date(2025, 5, 15));
+      REQUIRE(dataIter.getStringByIndex(10).value() == "blob_" + to_string(rowNum));
+      REQUIRE(dataIter.getStringByIndex(11).value() == "string_" + to_string(rowNum));
     }
     rowNum++;
   }
   REQUIRE(rowNum == maxRowNumber);
 
-  sessionDataSet =
-      session->executeQueryStatement("SELECT * FROM table1 order by time");
+  sessionDataSet = session->executeQueryStatement("SELECT * FROM table1 order by time");
   rowNum = 0;
   timestamp = 0;
   while (sessionDataSet->hasNext()) {
@@ -298,18 +281,14 @@ TEST_CASE("Test RelationalTabletTsblockRead",
     } else {
       REQUIRE(record->fields[1].boolV.value() == (rowNum % 2 == 0));
       REQUIRE(record->fields[2].intV.value() == static_cast<int32_t>(rowNum));
-      REQUIRE(record->fields[3].longV.value() ==
-              static_cast<int64_t>(timestamp));
+      REQUIRE(record->fields[3].longV.value() == static_cast<int64_t>(timestamp));
       REQUIRE(fabs(record->fields[4].floatV.value() - rowNum * 1.1f) < 0.1f);
       REQUIRE(fabs(record->fields[5].doubleV.value() - rowNum * 1.1f) < 0.1);
       REQUIRE(record->fields[6].stringV.value() == "text_" + to_string(rowNum));
-      REQUIRE(record->fields[7].longV.value() ==
-              static_cast<int64_t>(timestamp));
-      REQUIRE(record->fields[8].dateV.value() ==
-              boost::gregorian::date(2025, 5, 15));
+      REQUIRE(record->fields[7].longV.value() == static_cast<int64_t>(timestamp));
+      REQUIRE(record->fields[8].dateV.value() == boost::gregorian::date(2025, 5, 15));
       REQUIRE(record->fields[9].stringV.value() == "blob_" + to_string(rowNum));
-      REQUIRE(record->fields[10].stringV.value() ==
-              "string_" + to_string(rowNum));
+      REQUIRE(record->fields[10].stringV.value() == "string_" + to_string(rowNum));
     }
     rowNum++;
   }
