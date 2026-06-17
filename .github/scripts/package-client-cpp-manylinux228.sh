@@ -72,8 +72,9 @@ cmake --version
 java -version
 
 # WITH_SSL is on by default; install the system OpenSSL dev package so
-# find_package(OpenSSL) resolves it (manylinux_2_28 is AlmaLinux 8 -> OpenSSL
-# 1.1.1) instead of falling back to a from-source build.
+# find_package(OpenSSL) resolves it instead of falling back to a from-source
+# build. Thrift 0.23 links against whatever the system provides (manylinux_2_28
+# is AlmaLinux 8 -> OpenSSL 1.1.1, kept for the glibc 2.28 baseline).
 if ! rpm -q openssl-devel >/dev/null 2>&1; then
   if command -v dnf >/dev/null 2>&1; then
     dnf install -y openssl-devel

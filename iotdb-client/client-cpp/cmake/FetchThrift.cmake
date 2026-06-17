@@ -100,7 +100,7 @@ endif()
 # binary / library can immediately drive code generation and linking.
 # ---------------------------------------------------------------------------
 set(_thrift_cmake_args
-        # CMake 4.x rejects Thrift 0.21's cmake_minimum_required(3.0); set policy first.
+        # CMake 4.x rejects Thrift's old cmake_minimum_required(3.x); set policy first.
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
         "-DCMAKE_INSTALL_PREFIX=${_thrift_install}"
         "-DCMAKE_BUILD_TYPE=${_thrift_build_config}"

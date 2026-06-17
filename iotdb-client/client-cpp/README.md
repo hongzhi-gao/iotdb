@@ -300,7 +300,7 @@ so they require glibc 2.28 or newer on the deployment host.
 | ppc64le | `quay.io/pypa/manylinux_2_28_ppc64le` |
 | s390x | `quay.io/pypa/manylinux_2_28_s390x` |
 
-Thrift **0.21.0** is compiled from source during the CMake configure step (see
+Thrift **0.23.0** is compiled from source during the CMake configure step (see
 `cmake/FetchThrift.cmake`). Older releases that used pre-built
 `iotdb-tools-thrift` Maven artifacts and `-Diotdb-tools-thrift.version=...`
 for glibc/MSVC compatibility apply only to the **legacy** client-cpp build;
@@ -384,7 +384,7 @@ etc. directly.
 | `IOTDB_OFFLINE`       | `OFF`                            | Disallow any network access during configure.                                                            |
 | `IOTDB_DEPS_DIR`      | `<client-cpp>/third-party`       | Override the local tarball cache directory.                                                              |
 | `BOOST_VERSION`       | `1.60.0` (`1.84.0` on macOS)     | Boost version that CMake will look for / download.                                                       |
-| `THRIFT_VERSION`      | `0.21.0`                         | Apache Thrift version to build from source.                                                              |
+| `THRIFT_VERSION`      | `0.23.0`                         | Apache Thrift version to build from source.                                                              |
 | `BOOST_ROOT`          | (unset)                          | Existing Boost install to reuse, equivalent to `-Dboost.include.dir=...` from the legacy build.          |
 | `OPENSSL_ROOT_DIR`    | (unset)                          | Existing OpenSSL install when `WITH_SSL=ON`.                                                             |
 | `CMAKE_INSTALL_PREFIX`| `<build>/install`                | Install location.                                                                                        |
@@ -427,17 +427,17 @@ cmake --build build --config Release --target install
 
    | Platform   | Required files                                                                                                                                                       |
    |------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-   | `linux/`   | `thrift-0.21.0.tar.gz`, `boost_1_60_0.tar.gz`, `m4-1.4.19.tar.gz`, `flex-2.6.4.tar.gz`, `bison-3.8.tar.gz` (and `openssl-1.1.1w.tar.gz` only when `WITH_SSL=ON` and no system OpenSSL is present) |
-   | `mac/`     | `thrift-0.21.0.tar.gz`, `boost_1_84_0.tar.gz` (newer Boost for Xcode/Clang; Apple ships m4/flex/bison; `openssl-1.1.1w.tar.gz` optional)                              |
-   | `windows/` | `thrift-0.21.0.tar.gz`, `boost_1_60_0.tar.gz` (Boost headers only - no `b2` build required for `iotdb_session`)                                                      |
+   | `linux/`   | `thrift-0.23.0.tar.gz`, `boost_1_60_0.tar.gz`, `m4-1.4.19.tar.gz`, `flex-2.6.4.tar.gz`, `bison-3.8.tar.gz` (and `openssl-3.5.0.tar.gz` only when `WITH_SSL=ON` and no system OpenSSL is present) |
+   | `mac/`     | `thrift-0.23.0.tar.gz`, `boost_1_84_0.tar.gz` (newer Boost for Xcode/Clang; Apple ships m4/flex/bison; `openssl-3.5.0.tar.gz` optional)                               |
+   | `windows/` | `thrift-0.23.0.tar.gz`, `boost_1_60_0.tar.gz` (Boost headers only - no `b2` build required for `iotdb_session`)                                                      |
 
    Reference URLs (the configure step uses the same):
-   - Apache Thrift 0.21.0: <https://archive.apache.org/dist/thrift/0.21.0/thrift-0.21.0.tar.gz>
+   - Apache Thrift 0.23.0: <https://archive.apache.org/dist/thrift/0.23.0/thrift-0.23.0.tar.gz>
    - Boost 1.60.0:        <https://archives.boost.io/release/1.60.0/source/boost_1_60_0.tar.gz>
    - GNU m4 1.4.19:       <https://ftp.gnu.org/gnu/m4/m4-1.4.19.tar.gz>
    - GNU flex 2.6.4:      <https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz>
    - GNU bison 3.8:       <https://ftp.gnu.org/gnu/bison/bison-3.8.tar.gz>
-   - OpenSSL 1.1.1w:      <https://www.openssl.org/source/openssl-1.1.1w.tar.gz>
+   - OpenSSL 3.5.0:       <https://www.openssl.org/source/openssl-3.5.0.tar.gz>
 
 2. Run the build with offline mode enabled:
 
@@ -461,7 +461,7 @@ CI environments can share a single cache by setting
 ### Linux
 
 - Tested with GCC 7+ and Clang 9+. Anything that can compile Apache Thrift
-  0.21.0 works.
+  0.23.0 works.
 - Build deps that must already exist on the host (only required when
   CMake auto-builds m4/flex/bison from tarball): `make`, `autoconf`,
   `gcc`, plus the standard C/C++ toolchain. `sudo` is **not** required;
@@ -492,12 +492,11 @@ Prerequisites:
 2. **flex / bison.** Install <https://sourceforge.net/projects/winflexbison/>
    and rename `win_flex.exe`→`flex.exe`, `win_bison.exe`→`bison.exe` on
    `PATH`.
-3. **OpenSSL 1.1.1** *(`WITH_SSL=ON` is the default)*: install OpenSSL **1.x**
-   — e.g. `choco install openssl --version=1.1.1.2100`, or a Win64 OpenSSL
-   1.1.1 installer from <https://slproweb.com/products/Win32OpenSSL.html> —
-   then pass `-DOPENSSL_ROOT_DIR=...` to CMake if it is not auto-detected.
-   OpenSSL 3.x is not supported (Thrift 0.21 needs 1.x). Pass `-DWITH_SSL=OFF`
-   to build without SSL.
+3. **OpenSSL** *(`WITH_SSL=ON` is the default)*: install OpenSSL — e.g.
+   `choco install openssl`, or a Win64 OpenSSL installer from
+   <https://slproweb.com/products/Win32OpenSSL.html> — then pass
+   `-DOPENSSL_ROOT_DIR=...` to CMake if it is not auto-detected. Pass
+   `-DWITH_SSL=OFF` to build without SSL.
 
 On Windows the SDK ships as **`iotdb_session.dll`** plus an import library
 **`iotdb_session.lib`**, built with **`/MD`** (dynamic CRT, same as a
@@ -513,23 +512,21 @@ the GNU autotools tarballs assume a POSIX shell environment.
 `iotdb_session` builds **with OpenSSL by default** (`WITH_SSL=ON`). Disable
 it with `-Dwith.ssl=OFF` (Maven) or `-DWITH_SSL=OFF` (standalone CMake).
 
-OpenSSL is **pinned to the 1.x series**. Apache Thrift 0.21's `TSSLSocket.cpp`
-uses APIs removed in OpenSSL 3.x (`SSLv3_method`, `TLSv1_method`,
-`ASN1_STRING_data`, non-const `X509_NAME*`), so a 3.x OpenSSL cannot be used.
+The bundled Apache Thrift 0.23 builds against OpenSSL 1.x and 3.x, so any
+system OpenSSL is used as-is.
 
-CMake calls `find_package(OpenSSL)` and **accepts a system OpenSSL only when it
-is 1.x**; a 3.x install is ignored. When a 1.x OpenSSL is used, its shared
-libraries are **bundled into the package `lib/` directory** (next to
-`iotdb_session`) so the published SDK is self-contained.
+CMake calls `find_package(OpenSSL)` and uses whatever system / vendor OpenSSL
+it finds. Its shared libraries are **bundled into the package `lib/` directory**
+(next to `iotdb_session`) so the published SDK is self-contained.
 
-If no usable 1.x OpenSSL is found, it falls back to:
+If no system OpenSSL is found, it falls back to:
 
-- **Linux / macOS** – use a local `openssl-1.1.1w.tar.gz` (or download it
+- **Linux / macOS** – use a local `openssl-3.5.0.tar.gz` (or download it
   when not in offline mode), configure with `no-shared`, install into
   `build/_deps/openssl/install`, and link statically.
 - **Windows** – fail with a friendly message that points at a prebuilt
-  OpenSSL 1.1.1 (`choco install openssl --version=1.1.1.2100`). Building
-  OpenSSL from source via MSVC is out of scope.
+  OpenSSL (`choco install openssl`). Building OpenSSL from source via MSVC
+  is out of scope.
 
 ## Tests
 
