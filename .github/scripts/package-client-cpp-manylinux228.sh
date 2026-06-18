@@ -71,22 +71,22 @@ fi
 cmake --version
 java -version
 
-# WITH_SSL is on by default; install the system OpenSSL dev package so
-# find_package(OpenSSL) resolves it instead of falling back to a from-source
-# build. Thrift 0.23 links against whatever the system provides (manylinux_2_28
-# is AlmaLinux 8 -> OpenSSL 1.1.1, kept for the glibc 2.28 baseline).
-if ! rpm -q openssl-devel >/dev/null 2>&1; then
+# manylinux_2_28 is AlmaLinux 8, whose system OpenSSL is 1.1.1 (EOL and not
+# Apache-2.0 - must not be bundled/redistributed in an ASF convenience binary).
+# Build OpenSSL 3.x from source instead (-Diotdb.openssl.from.source=ON), which
+# keeps the glibc 2.28 baseline. OpenSSL's Configure needs perl.
+if ! command -v perl >/dev/null 2>&1; then
   if command -v dnf >/dev/null 2>&1; then
-    dnf install -y openssl-devel
+    dnf install -y perl perl-IPC-Cmd
   else
-    yum install -y openssl-devel
+    yum install -y perl perl-IPC-Cmd
   fi
 fi
-openssl version || true
 
 cd "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
 ./mvnw clean package -P with-cpp -pl iotdb-client/client-cpp -am -DskipTests \
   -Dspotless.skip=true \
+  -Diotdb.openssl.from.source=ON \
   -Dclient.cpp.package.classifier="${PACKAGE_CLASSIFIER}"
 
 SO="iotdb-client/client-cpp/target/install/lib/libiotdb_session.so"

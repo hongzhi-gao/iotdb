@@ -40,10 +40,18 @@
 set(OPENSSL_FALLBACK_VERSION "3.5.0"
     CACHE STRING "OpenSSL version built from source when no system OpenSSL is found")
 
-find_package(OpenSSL QUIET)
-if(OpenSSL_FOUND)
-    message(STATUS "[OpenSSL] using system OpenSSL ${OPENSSL_VERSION}")
-    return()
+# Build OpenSSL from source even if a system one exists. Used by the Linux
+# packaging build, whose AlmaLinux 8 baseline ships OpenSSL 1.1.1 (EOL, not
+# Apache-2.0, must not be redistributed) - we build 3.x there instead.
+option(IOTDB_OPENSSL_FROM_SOURCE
+        "Ignore any system OpenSSL and build OpenSSL ${OPENSSL_FALLBACK_VERSION} from source" OFF)
+
+if(NOT IOTDB_OPENSSL_FROM_SOURCE)
+    find_package(OpenSSL QUIET)
+    if(OpenSSL_FOUND)
+        message(STATUS "[OpenSSL] using system OpenSSL ${OPENSSL_VERSION}")
+        return()
+    endif()
 endif()
 
 if(WIN32)
@@ -54,7 +62,7 @@ if(WIN32)
             "Pass -DWITH_SSL=OFF to build without SSL.")
 endif()
 
-# --- Linux / macOS fallback: build OpenSSL 1.x from source ---------------
+# --- Linux / macOS: build OpenSSL ${OPENSSL_FALLBACK_VERSION} from source -
 set(_ossl_tarname "openssl-${OPENSSL_FALLBACK_VERSION}.tar.gz")
 set(_ossl_tarball "${IOTDB_OS_DEPS_DIR}/${_ossl_tarname}")
 
@@ -93,10 +101,11 @@ if(NOT EXISTS "${_ossl_stamp}")
     endif()
 
     message(STATUS "[OpenSSL] configuring -> ${_ossl_inst}")
-    # ./config auto-detects the platform target; no-shared links OpenSSL
-    # straight into libiotdb_session.
+    # ./config auto-detects the platform target. Build SHARED libraries
+    # (libssl.so.3 / libcrypto.so.3) so they can be bundled next to
+    # libiotdb_session and shipped as the SDK's OpenSSL runtime.
     execute_process(
-            COMMAND ./config --prefix=${_ossl_inst} --openssldir=${_ossl_inst}/ssl no-shared
+            COMMAND ./config --prefix=${_ossl_inst} --openssldir=${_ossl_inst}/ssl shared
             WORKING_DIRECTORY "${_ossl_src}"
             RESULT_VARIABLE _rc)
     if(NOT _rc EQUAL 0)
@@ -123,6 +132,6 @@ if(NOT EXISTS "${_ossl_stamp}")
 endif()
 
 set(OPENSSL_ROOT_DIR "${_ossl_inst}" CACHE PATH "OpenSSL root" FORCE)
-set(OPENSSL_USE_STATIC_LIBS ON)
+set(OPENSSL_USE_STATIC_LIBS OFF)
 find_package(OpenSSL REQUIRED)
-message(STATUS "[OpenSSL] built locally at ${OPENSSL_ROOT_DIR}")
+message(STATUS "[OpenSSL] built locally (shared) at ${OPENSSL_ROOT_DIR}")

@@ -145,6 +145,22 @@ if(UNIX AND NOT APPLE)
             SOVERSION "${IOTDB_SESSION_SOVERSION}")
 endif()
 
+# When SSL is on we bundle the OpenSSL shared libraries next to libiotdb_session
+# in the package lib/ directory. Give the library an $ORIGIN-relative runtime
+# search path so the loader finds them without LD_LIBRARY_PATH / install_name
+# tweaks, keeping the SDK self-contained.
+if(WITH_SSL)
+    if(APPLE)
+        set_target_properties(iotdb_session PROPERTIES
+                BUILD_RPATH "@loader_path"
+                INSTALL_RPATH "@loader_path")
+    elseif(UNIX)
+        set_target_properties(iotdb_session PROPERTIES
+                BUILD_RPATH "$ORIGIN"
+                INSTALL_RPATH "$ORIGIN")
+    endif()
+endif()
+
 add_dependencies(iotdb_session iotdb_thrift_external iotdb_thrift_codegen)
 
 target_compile_definitions(iotdb_session PRIVATE THRIFT_STATIC_DEFINE IOTDB_BUILDING_SHARED)

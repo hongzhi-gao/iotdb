@@ -512,21 +512,24 @@ the GNU autotools tarballs assume a POSIX shell environment.
 `iotdb_session` builds **with OpenSSL by default** (`WITH_SSL=ON`). Disable
 it with `-Dwith.ssl=OFF` (Maven) or `-DWITH_SSL=OFF` (standalone CMake).
 
-The bundled Apache Thrift 0.23 builds against OpenSSL 1.x and 3.x, so any
-system OpenSSL is used as-is.
+OpenSSL **3.x** is used (Apache-2.0 licensed). Note that **OpenSSL 4.0 removed**
+the legacy TLS-method APIs (`TLSv1_method`, `SSLv3_method`, …) that Apache
+Thrift's `TSSLSocket` still calls, so install/point at a 3.x build, not 4.0.
 
-CMake calls `find_package(OpenSSL)` and uses whatever system / vendor OpenSSL
-it finds. Its shared libraries are **bundled into the package `lib/` directory**
-(next to `iotdb_session`) so the published SDK is self-contained.
+CMake calls `find_package(OpenSSL)` and uses the system OpenSSL it finds. Its
+shared libraries are **bundled into the package `lib/` directory** (next to
+`iotdb_session`, which records an `$ORIGIN`/`@loader_path` runtime path) so the
+published SDK is self-contained.
 
-If no system OpenSSL is found, it falls back to:
+Fallbacks:
 
-- **Linux / macOS** – use a local `openssl-3.5.0.tar.gz` (or download it
-  when not in offline mode), configure with `no-shared`, install into
-  `build/_deps/openssl/install`, and link statically.
-- **Windows** – fail with a friendly message that points at a prebuilt
-  OpenSSL (`choco install openssl`). Building OpenSSL from source via MSVC
-  is out of scope.
+- **Linux / macOS** – when no system OpenSSL is found (or
+  `-DIOTDB_OPENSSL_FROM_SOURCE=ON`, which the Linux packaging build uses so the
+  AlmaLinux 8 baseline's OpenSSL 1.1.1 is never redistributed), build
+  `openssl-3.5.0.tar.gz` from source as **shared** libraries and bundle them.
+- **Windows** – fail with a friendly message; install a prebuilt OpenSSL 3.x
+  (e.g. the FireDaemon or slproweb 3.5.x zip) and set `-DOPENSSL_ROOT_DIR=...`.
+  Building OpenSSL from source via MSVC is out of scope.
 
 ## Tests
 
