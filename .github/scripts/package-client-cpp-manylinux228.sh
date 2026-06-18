@@ -74,13 +74,13 @@ java -version
 # manylinux_2_28 is AlmaLinux 8, whose system OpenSSL is 1.1.1 (EOL and not
 # Apache-2.0 - must not be bundled/redistributed in an ASF convenience binary).
 # Build OpenSSL 3.x from source instead (-Diotdb.openssl.from.source=ON), which
-# keeps the glibc 2.28 baseline. OpenSSL's Configure needs perl.
-if ! command -v perl >/dev/null 2>&1; then
-  if command -v dnf >/dev/null 2>&1; then
-    dnf install -y perl perl-IPC-Cmd
-  else
-    yum install -y perl perl-IPC-Cmd
-  fi
+# keeps the glibc 2.28 baseline. OpenSSL 3.x's Configure needs perl plus a few
+# modules (IPC::Cmd, Data::Dumper) that are not on the minimal image - install
+# them even when perl itself is already present.
+if command -v dnf >/dev/null 2>&1; then
+  dnf install -y perl perl-IPC-Cmd perl-Data-Dumper
+else
+  yum install -y perl perl-IPC-Cmd perl-Data-Dumper
 fi
 
 cd "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
