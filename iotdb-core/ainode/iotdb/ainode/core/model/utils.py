@@ -219,16 +219,24 @@ def _fetch_model_from_local(source_path: str, storage_path: str):
     shutil.copytree(source_dir, storage_dir)
 
 
-def _fetch_model_from_hf_repo(repo_id: str, storage_path: str):
+def _fetch_model_from_hf_repo(
+    repo_id: str,
+    storage_path: str,
+    endpoint: str = None,
+    local_files_only: bool = False,
+):
     logger.info(
         f"Downloading model from HuggingFace repository: {repo_id} -> {storage_path}"
     )
-    # Use snapshot_download to download entire repository (including config.json and model.safetensors)
+    # Use snapshot_download to download entire repository (including config.json and model.safetensors).
+    # endpoint allows pointing at an internal mirror; local_files_only enforces offline mode.
     try:
         snapshot_download(
             repo_id=repo_id,
             local_dir=storage_path,
             local_dir_use_symlinks=False,
+            endpoint=endpoint,
+            local_files_only=local_files_only,
         )
     except Exception as e:
         logger.error(f"Failed to download model from HuggingFace: {e}")

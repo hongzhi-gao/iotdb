@@ -1,0 +1,247 @@
+# Publish-oriented packaging workflow for AINode.
+# - manual runs (workflow_dispatch), release:published, v* tags
+# - rc/** pushes only when AINode-related paths change (job should-package)
+# Builds a self-contained AINode binary inside manylinux_2_28 so the PyInstaller
+# bundle runs on glibc 2.28+ Linux (RHEL8 / Ubuntu 20.04+ / Kylin V10 / UOS ...).
+name: AINode package
+
+on:
+  workflow_dispatch:
+    inputs:
+      variants:
+        description: "Which packages to build"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - linux-x86_64
+          - linux-aarch64
+  release:
+    types: [published]
+  push:
+    branches:
+      - "rc/**"
+    tags:
+      - "v*"
+
+concurrency:
+  group: ainode-package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_OPTS: -Dhttp.keepAlive=false -Dmaven.wagon.http.pool=false -Dmaven.wagon.http.retryHandler.class=standard -Dmaven.wagon.http.retryHandler.count=3
+  MAVEN_ARGS: --batch-mode --no-transfer-progress
+
+jobs:
+  should-package:
+    # Keep rc branch cost low: skip the matrix when unrelated files change.
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.result.outputs.run }}
+      run_x86_64: ${{ steps.variant.outputs.run_x86_64 }}
+      run_aarch64: ${{ steps.variant.outputs.run_aarch64 }}
+    steps:
+      - uses: actions/checkout@v5
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/rc/')
+        with:
+          fetch-depth: 0
+      - name: Detect AINode package changes
+        id: filter
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/rc/')
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE="${{ github.event.before }}"
+          HEAD="${{ github.sha }}"
+          if [[ "$BASE" =~ ^0+$ ]]; then
+            BASE="$(git hash-object -t tree /dev/null)"
+          fi
+
+          ainode=false
+          while IFS= read -r file; do
+            case "$file" in
+              iotdb-core/ainode/*|scripts/sbin/*ainode.*|scripts/sbin/windows/*ainode.*|distribution/src/assembly/ainode.xml|distribution/pom.xml|.github/workflows/ainode-package.yml|.github/scripts/package-ainode-manylinux228.sh)
+                ainode=true
+                break
+                ;;
+            esac
+          done < <(git diff --name-only "$BASE" "$HEAD")
+
+          echo "ainode=${ainode}" >> "$GITHUB_OUTPUT"
+      - id: result
+        shell: bash
+        run: |
+          set -euo pipefail
+          E="${{ github.event_name }}"
+          R="${{ github.ref }}"
+          if [[ "$E" == "workflow_dispatch" ]] || [[ "$E" == "release" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$E" == "push" ]] && [[ "$R" == refs/tags/v* ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$E" == "push" ]] && [[ "$R" =~ ^refs/heads/rc/ ]]; then
+            if [[ "${{ steps.filter.outputs.ainode }}" == "true" ]]; then
+              echo "run=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "run=false" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          echo "run=false" >> "$GITHUB_OUTPUT"
+      - id: variant
+        # Map the workflow_dispatch variant choice to per-arch flags. Any non-manual
+        # trigger that reaches here builds all arches.
+        shell: bash
+        run: |
+          set -euo pipefail
+          VARIANT="${{ github.event.inputs.variants || 'all' }}"
+          run_x86_64=false
+          run_aarch64=false
+          case "$VARIANT" in
+            all) run_x86_64=true; run_aarch64=true ;;
+            linux-x86_64) run_x86_64=true ;;
+            linux-aarch64) run_aarch64=true ;;
+            *) echo "Unknown variant: $VARIANT" >&2; exit 1 ;;
+          esac
+          echo "run_x86_64=${run_x86_64}" >> "$GITHUB_OUTPUT"
+          echo "run_aarch64=${run_aarch64}" >> "$GITHUB_OUTPUT"
+
+  package-linux-x86_64-glibc228:
+    name: Package (linux-x86_64-glibc2.28)
+    needs: should-package
+    if: needs.should-package.outputs.run == 'true' && needs.should-package.outputs.run_x86_64 == 'true'
+    # Checkout/cache on host (Node actions need modern glibc); build in
+    # manylinux_2_28 via docker run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache Maven packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.m2
+          key: ainode-x86_64-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ainode-x86_64-m2-
+      - name: Cache AINode build venv (poetry / PyInstaller)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/iotdb-ainode-build
+          key: ainode-x86_64-build-${{ hashFiles('iotdb-core/ainode/pyproject.toml', 'iotdb-core/ainode/poetry.lock', 'iotdb-core/ainode/ainode.spec') }}
+          restore-keys: |
+            ainode-x86_64-build-
+      - name: Package AINode (glibc 2.28 baseline)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "${HOME}/.m2" "${HOME}/.cache/iotdb-ainode-build"
+          chmod +x .github/scripts/package-ainode-manylinux228.sh
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -v "${HOME}/.m2:/root/.m2" \
+            -v "${HOME}/.cache/iotdb-ainode-build:/root/.cache/iotdb-ainode-build" \
+            -w /workspace \
+            -e GITHUB_WORKSPACE=/workspace \
+            quay.io/pypa/manylinux_2_28_x86_64 \
+            bash .github/scripts/package-ainode-manylinux228.sh
+      - name: Restore workspace ownership after container build
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
+      - name: Resolve package zip
+        id: pkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          packages=(distribution/target/apache-iotdb-*-ainode-bin.zip)
+          if [ "${#packages[@]}" -ne 1 ]; then
+            echo "Expected exactly one package zip, got: ${packages[*]:-(none)}"
+            exit 1
+          fi
+          zip="${packages[0]}"
+          base="$(basename "${zip}" .zip)"
+          echo "path=${zip}" >> "$GITHUB_OUTPUT"
+          echo "name=${base}-linux-x86_64-glibc2.28" >> "$GITHUB_OUTPUT"
+          if [ ! -f "${zip}.sha512" ]; then
+            sha512sum "${zip}" | awk '{print $1}' > "${zip}.sha512"
+          fi
+          echo "sha512_path=${zip}.sha512" >> "$GITHUB_OUTPUT"
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: |
+            ${{ steps.pkg.outputs.path }}
+            ${{ steps.pkg.outputs.sha512_path }}
+          if-no-files-found: error
+
+  package-linux-aarch64-glibc228:
+    name: Package (linux-aarch64-glibc2.28)
+    needs: should-package
+    if: needs.should-package.outputs.run == 'true' && needs.should-package.outputs.run_aarch64 == 'true'
+    # Checkout/cache on host; build in manylinux_2_28 aarch64 via docker run.
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      - name: Cache Maven packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.m2
+          key: ainode-aarch64-m2-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ainode-aarch64-m2-
+      - name: Cache AINode build venv (poetry / PyInstaller)
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/iotdb-ainode-build
+          key: ainode-aarch64-build-${{ hashFiles('iotdb-core/ainode/pyproject.toml', 'iotdb-core/ainode/poetry.lock', 'iotdb-core/ainode/ainode.spec') }}
+          restore-keys: |
+            ainode-aarch64-build-
+      - name: Package AINode (glibc 2.28 baseline)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "${HOME}/.m2" "${HOME}/.cache/iotdb-ainode-build"
+          chmod +x .github/scripts/package-ainode-manylinux228.sh
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -v "${HOME}/.m2:/root/.m2" \
+            -v "${HOME}/.cache/iotdb-ainode-build:/root/.cache/iotdb-ainode-build" \
+            -w /workspace \
+            -e GITHUB_WORKSPACE=/workspace \
+            quay.io/pypa/manylinux_2_28_aarch64 \
+            bash .github/scripts/package-ainode-manylinux228.sh
+      - name: Restore workspace ownership after container build
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}"
+      - name: Resolve package zip
+        id: pkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          packages=(distribution/target/apache-iotdb-*-ainode-bin.zip)
+          if [ "${#packages[@]}" -ne 1 ]; then
+            echo "Expected exactly one package zip, got: ${packages[*]:-(none)}"
+            exit 1
+          fi
+          zip="${packages[0]}"
+          base="$(basename "${zip}" .zip)"
+          echo "path=${zip}" >> "$GITHUB_OUTPUT"
+          echo "name=${base}-linux-aarch64-glibc2.28" >> "$GITHUB_OUTPUT"
+          if [ ! -f "${zip}.sha512" ]; then
+            sha512sum "${zip}" | awk '{print $1}' > "${zip}.sha512"
+          fi
+          echo "sha512_path=${zip}.sha512" >> "$GITHUB_OUTPUT"
+      - name: Upload zip artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: |
+            ${{ steps.pkg.outputs.path }}
+            ${{ steps.pkg.outputs.sha512_path }}
+          if-no-files-found: error

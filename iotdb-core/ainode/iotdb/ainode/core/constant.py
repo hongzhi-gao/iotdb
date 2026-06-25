@@ -63,6 +63,15 @@ AINODE_INFERENCE_EXTRA_MEMORY_RATIO = (
 AINODE_MODELS_DIR = os.path.join(IOTDB_AINODE_HOME, "data/ainode/models")
 AINODE_MODELS_BUILTIN_DIR = "iotdb.ainode.core.model"
 AINODE_SYSTEM_DIR = os.path.join(IOTDB_AINODE_HOME, "data/ainode/system")
+
+# AINode builtin model download configuration.
+# Endpoint used to pull builtin model weights. Empty means the huggingface_hub
+# default (https://huggingface.co). Set it to an internal mirror (e.g. a private
+# registry or https://hf-mirror.com) for private/offline deployments.
+AINODE_HF_ENDPOINT = ""
+# Offline mode. When True, AINode never reaches the network for builtin models
+# and only uses weights already present under ain_models_dir.
+AINODE_HF_OFFLINE = False
 AINODE_LOG_DIR = os.path.join(IOTDB_AINODE_HOME, "logs")
 
 # AINode log

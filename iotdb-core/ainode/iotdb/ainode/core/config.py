@@ -29,6 +29,8 @@ from iotdb.ainode.core.constant import (
     AINODE_CONF_FILE_NAME,
     AINODE_CONF_GIT_FILE_NAME,
     AINODE_CONF_POM_FILE_NAME,
+    AINODE_HF_ENDPOINT,
+    AINODE_HF_OFFLINE,
     AINODE_INFERENCE_BATCH_INTERVAL_IN_MS,
     AINODE_INFERENCE_EXTRA_MEMORY_RATIO,
     AINODE_INFERENCE_MAX_OUTPUT_LENGTH,
@@ -93,6 +95,10 @@ class AINodeConfig(object):
         self._ain_models_dir = AINODE_MODELS_DIR
         self._ain_models_builtin_dir = AINODE_MODELS_BUILTIN_DIR
         self._ain_system_dir = AINODE_SYSTEM_DIR
+
+        # Builtin model download source / offline switch
+        self._ain_hf_endpoint = AINODE_HF_ENDPOINT
+        self._ain_hf_offline = AINODE_HF_OFFLINE
 
         # Whether to enable compression for thrift
         self._ain_thrift_compression_enabled = AINODE_THRIFT_COMPRESSION_ENABLED
@@ -211,6 +217,18 @@ class AINodeConfig(object):
 
     def set_ain_system_dir(self, ain_system_dir: str) -> None:
         self._ain_system_dir = ain_system_dir
+
+    def get_ain_hf_endpoint(self) -> str:
+        return self._ain_hf_endpoint
+
+    def set_ain_hf_endpoint(self, ain_hf_endpoint: str) -> None:
+        self._ain_hf_endpoint = ain_hf_endpoint
+
+    def get_ain_hf_offline(self) -> bool:
+        return self._ain_hf_offline
+
+    def set_ain_hf_offline(self, ain_hf_offline: bool) -> None:
+        self._ain_hf_offline = ain_hf_offline
 
     def get_ain_thrift_compression_enabled(self) -> bool:
         return self._ain_thrift_compression_enabled
@@ -369,6 +387,14 @@ class AINodeDescriptor(object):
 
             if "ain_system_dir" in config_keys:
                 self._config.set_ain_system_dir(file_configs["ain_system_dir"])
+
+            if "ain_hf_endpoint" in config_keys:
+                self._config.set_ain_hf_endpoint(file_configs["ain_hf_endpoint"])
+
+            if "ain_hf_offline" in config_keys:
+                self._config.set_ain_hf_offline(
+                    int(file_configs["ain_hf_offline"]) == 1
+                )
 
             if "ain_seed_config_node" in config_keys:
                 self._config.set_ain_target_config_node_list(

@@ -143,30 +143,36 @@ class ModelStorage:
         def _download_model_if_necessary() -> bool:
             """Returns: True if the model is existed or downloaded successfully, False otherwise."""
             repo_id = BUILTIN_HF_TRANSFORMERS_MODEL_MAP[model_id].repo_id
+            config = AINodeDescriptor().get_config()
+            # Empty endpoint -> huggingface_hub default. The env vars HF_ENDPOINT /
+            # HF_HUB_OFFLINE are frozen at import time, so we pass them explicitly.
+            endpoint = config.get_ain_hf_endpoint() or None
+            offline = config.get_ain_hf_offline()
             weights_path = os.path.join(model_dir, MODEL_SAFETENSORS)
             config_path = os.path.join(model_dir, CONFIG_JSON)
-            if not os.path.exists(weights_path):
-                try:
-                    hf_hub_download(
-                        repo_id=repo_id,
-                        filename=MODEL_SAFETENSORS,
-                        local_dir=model_dir,
-                    )
-                except Exception as e:
+            for filename, target_path in (
+                (MODEL_SAFETENSORS, weights_path),
+                (CONFIG_JSON, config_path),
+            ):
+                if os.path.exists(target_path):
+                    continue
+                if offline:
                     logger.error(
-                        f"Failed to download model weights from HuggingFace: {e}"
+                        f"Builtin model '{model_id}' file '{filename}' is missing at "
+                        f"{target_path} while ain_hf_offline is enabled. Place the "
+                        f"offline model pack under ain_models_dir before starting. Skipping download."
                     )
                     return False
-            if not os.path.exists(config_path):
                 try:
                     hf_hub_download(
                         repo_id=repo_id,
-                        filename=CONFIG_JSON,
+                        filename=filename,
                         local_dir=model_dir,
+                        endpoint=endpoint,
                     )
                 except Exception as e:
                     logger.error(
-                        f"Failed to download model config from HuggingFace: {e}"
+                        f"Failed to download model file '{filename}' from HuggingFace: {e}"
                     )
                     return False
             return True
@@ -266,7 +272,13 @@ class ModelStorage:
         ensure_init_file(model_dir)
 
         if uri_type == UriType.REPO:
-            _fetch_model_from_hf_repo(parsed_uri, model_dir)
+            config = AINodeDescriptor().get_config()
+            _fetch_model_from_hf_repo(
+                parsed_uri,
+                model_dir,
+                endpoint=config.get_ain_hf_endpoint() or None,
+                local_files_only=config.get_ain_hf_offline(),
+            )
         else:
             _fetch_model_from_local(os.path.expanduser(parsed_uri), model_dir)
 

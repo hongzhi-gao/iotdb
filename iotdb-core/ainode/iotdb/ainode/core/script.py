@@ -64,6 +64,14 @@ def main():
         except Exception as e:
             logger.warning("Start AINode failed, because of: {}".format(e))
             sys.exit(1)
+    elif command == "pull-models":
+        # Offline helper: pre-download builtin model weights for private/air-gapped
+        # deployments. Imported lazily to keep the start path light.
+        from iotdb.ainode.core.model.builtin_model_downloader import (
+            main as pull_models_main,
+        )
+
+        sys.exit(pull_models_main(arguments[2:]))
     else:
         logger.warning("Unknown argument: {}.".format(command))
 
