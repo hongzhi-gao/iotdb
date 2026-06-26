@@ -37,17 +37,33 @@ case "${MACHINE}" in
 esac
 PACKAGE_CLASSIFIER="${PACKAGE_CLASSIFIER:-${DEFAULT_CLASSIFIER}}"
 
-# --- Python 3.11 -----------------------------------------------------------
-# manylinux images ship multiple CPythons under /opt/python. pyproject pins
-# python >=3.11,<3.12, and build_binary.py is invoked by Maven as `python3`.
-PY311_BIN=/opt/python/cp311-cp311/bin
-if [[ ! -x "${PY311_BIN}/python" ]]; then
-  echo "ERROR: CPython 3.11 not found in manylinux image at ${PY311_BIN}" >&2
-  exit 1
+# --- Python 3.11 with a shared libpython -----------------------------------
+# manylinux's /opt/python interpreters are built WITHOUT --enable-shared (they
+# exist to build wheels), so PyInstaller cannot use them: it needs libpython*.so.
+# Install the AlmaLinux 8 system python3.11 instead (ships libpython3.11.so /
+# Py_ENABLE_SHARED=1) and make `python3`/`python` resolve to it, since
+# build_binary.py is invoked by Maven as `python3` and creates its venv from it.
+if command -v dnf >/dev/null 2>&1; then
+  dnf install -y python3.11 python3.11-devel python3.11-pip
+else
+  yum install -y python3.11 python3.11-devel python3.11-pip
 fi
-export PATH="${PY311_BIN}:${PATH}"
+PYSHIM=/opt/py311-shim
+mkdir -p "${PYSHIM}"
+ln -sf /usr/bin/python3.11 "${PYSHIM}/python3"
+ln -sf /usr/bin/python3.11 "${PYSHIM}/python"
+export PATH="${PYSHIM}:${PATH}"
 python --version
 python3 --version
+# Fail fast if the interpreter lacks a shared libpython (PyInstaller hard
+# requirement) before spending minutes installing torch.
+python3 - <<'PYEOF'
+import sys, sysconfig
+shared = sysconfig.get_config_var("Py_ENABLE_SHARED")
+print("Py_ENABLE_SHARED:", shared, "LDLIBRARY:", sysconfig.get_config_var("LDLIBRARY"))
+if not shared:
+    sys.exit("ERROR: python3.11 was built without a shared libpython; PyInstaller cannot use it")
+PYEOF
 
 # --- JDK 17 for Maven ------------------------------------------------------
 JAVA_HOME=/opt/jdk-17
@@ -68,6 +84,19 @@ java -version
 # hard requirement. Install it when available for a smaller artifact.
 if command -v dnf >/dev/null 2>&1; then
   dnf install -y upx || echo "upx not available; PyInstaller will skip UPX compression"
+fi
+
+# Self-heal a cached venv built without a shared libpython (e.g. restored from a
+# previous run that used manylinux's static /opt/python). build_binary.py reuses
+# an existing venv as-is, so a stale broken venv would keep failing PyInstaller.
+# GitHub caches are immutable per key, so removing it here is the reliable fix.
+VENV_DIR="${HOME}/.cache/iotdb-ainode-build/ainode"
+VENV_PY="${VENV_DIR}/bin/python"
+if [[ -x "${VENV_PY}" ]]; then
+  if ! "${VENV_PY}" -c 'import sysconfig, sys; sys.exit(0 if sysconfig.get_config_var("Py_ENABLE_SHARED") else 1)'; then
+    echo "Removing stale venv at ${VENV_DIR} (built without shared libpython)"
+    rm -rf "${VENV_DIR}"
+  fi
 fi
 
 cd "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is not set}"
