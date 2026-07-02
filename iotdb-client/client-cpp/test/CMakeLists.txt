@@ -78,11 +78,14 @@ if(WITH_SSL)
     endif()
     file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/fixtures" _iotdb_test_fixtures_dir)
     file(TO_CMAKE_PATH "${_iotdb_openssl_executable}" _iotdb_openssl_executable_cmake)
+    file(TO_CMAKE_PATH "${OPENSSL_ROOT_DIR}" _iotdb_openssl_root_dir)
     string(REPLACE "\\" "/" _iotdb_test_fixtures_dir_fwd "${_iotdb_test_fixtures_dir}")
     string(REPLACE "\\" "/" _iotdb_openssl_executable_fwd "${_iotdb_openssl_executable_cmake}")
+    string(REPLACE "\\" "/" _iotdb_openssl_root_dir_fwd "${_iotdb_openssl_root_dir}")
     target_compile_definitions(rpc_ssl_utils_tests PRIVATE
             IOTDB_TEST_FIXTURES_DIR="${_iotdb_test_fixtures_dir_fwd}"
-            IOTDB_OPENSSL_EXECUTABLE="${_iotdb_openssl_executable_fwd}")
+            IOTDB_OPENSSL_EXECUTABLE="${_iotdb_openssl_executable_fwd}"
+            IOTDB_OPENSSL_ROOT_DIR="${_iotdb_openssl_root_dir_fwd}")
     add_custom_command(TARGET rpc_ssl_utils_tests POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_directory
                     "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"

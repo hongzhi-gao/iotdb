@@ -35,6 +35,7 @@
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <cstdlib>
 #endif
 
 #if WITH_SSL
@@ -281,6 +282,22 @@ std::string opensslExecutable() {
   return IOTDB_OPENSSL_EXECUTABLE;
 #else
   return "openssl";
+#endif
+}
+
+void prependOpenSslRuntimeToLdLibraryPath() {
+#ifdef IOTDB_OPENSSL_ROOT_DIR
+  const std::string root = IOTDB_OPENSSL_ROOT_DIR;
+  std::string libPath = joinPath(root, "lib64");
+  const std::string lib = joinPath(root, "lib");
+  if (pathExists(lib)) {
+    libPath = libPath + ":" + lib;
+  }
+  const char* existing = std::getenv("LD_LIBRARY_PATH");
+  if (existing != nullptr && existing[0] != '\0') {
+    libPath = libPath + ":" + existing;
+  }
+  setenv("LD_LIBRARY_PATH", libPath.c_str(), 1);
 #endif
 }
 
@@ -552,6 +569,7 @@ bool OpenSslServerProcess::start(const std::vector<std::string>& args) {
     return false;
   }
   if (pid == 0) {
+    prependOpenSslRuntimeToLdLibraryPath();
     execv(exe.c_str(), execArgv.data());
     _exit(127);
   }
