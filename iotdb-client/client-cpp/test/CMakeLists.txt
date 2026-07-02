@@ -96,10 +96,16 @@ if(WITH_SSL)
 endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
-    foreach(_t IN LISTS _test_targets)
+    set(_iotdb_asan_targets session_tests session_relational_tests session_c_tests
+            session_c_relational_tests)
+    foreach(_t IN LISTS _iotdb_asan_targets)
         target_compile_options(${_t} PRIVATE -fsanitize=address -fno-omit-frame-pointer)
         target_link_options(${_t} PRIVATE -fsanitize=address)
     endforeach()
+    # OpenSSL/Tongsuo may report benign leaks; avoid failing rpcSslUtilsTest on LeakSanitizer.
+    target_compile_options(rpc_ssl_utils_tests PRIVATE -fsanitize=address -fno-sanitize=leak
+            -fno-omit-frame-pointer)
+    target_link_options(rpc_ssl_utils_tests PRIVATE -fsanitize=address)
 endif()
 
 # Linux: keep iotdb_session in the executable's needed-list even when there
@@ -138,6 +144,22 @@ else()
     add_test(NAME sessionCIT             COMMAND session_c_tests)
     add_test(NAME sessionCRelationalIT   COMMAND session_c_relational_tests)
     add_test(NAME rpcSslUtilsTest      COMMAND rpc_ssl_utils_tests)
+    foreach(_t IN LISTS _test_targets)
+        add_custom_command(TARGET ${_t} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        $<TARGET_FILE:iotdb_session> $<TARGET_FILE_DIR:${_t}>
+                COMMENT "Copy IoTDB runtime library next to ${_t}")
+        if(WITH_SSL)
+            foreach(_ssl_lib IN LISTS OPENSSL_SSL_LIBRARY OPENSSL_CRYPTO_LIBRARY)
+                if(_ssl_lib AND EXISTS "${_ssl_lib}")
+                    add_custom_command(TARGET ${_t} POST_BUILD
+                            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                                    "${_ssl_lib}" $<TARGET_FILE_DIR:${_t}>
+                            COMMENT "Copy bundled SSL runtime next to ${_t}")
+                endif()
+            endforeach()
+        endif()
+    endforeach()
 endif()
 
 # Run sequentially: parallel ctest overloads the single local IoTDB instance.

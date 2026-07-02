@@ -541,17 +541,18 @@ bool OpenSslServerProcess::start(const std::vector<std::string>& args) {
   processId_ = pi.dwProcessId;
   CloseHandle(pi.hThread);
 #else
-  std::ostringstream command;
-  command << quoteArg(opensslExecutable());
-  for (const std::string& arg : argStorage) {
-    command << ' ' << quoteArg(arg);
+  std::vector<char*> execArgv;
+  execArgv.reserve(argStorage.size() + 1);
+  for (std::string& arg : argStorage) {
+    execArgv.push_back(const_cast<char*>(arg.c_str()));
   }
+  execArgv.push_back(nullptr);
   const pid_t pid = fork();
   if (pid < 0) {
     return false;
   }
   if (pid == 0) {
-    execl("/bin/sh", "sh", "-c", command.str().c_str(), static_cast<char*>(nullptr));
+    execv(exe.c_str(), execArgv.data());
     _exit(127);
   }
   childPid_ = pid;
