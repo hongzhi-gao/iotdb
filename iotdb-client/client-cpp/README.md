@@ -300,8 +300,8 @@ so they require glibc 2.28 or newer on the deployment host.
 | ppc64le | `quay.io/pypa/manylinux_2_28_ppc64le` |
 | s390x | `quay.io/pypa/manylinux_2_28_s390x` |
 
-Thrift **0.23.0** is compiled from source during the CMake configure step (see
-`cmake/FetchThrift.cmake`). Older releases that used pre-built
+Thrift commit **`6dfb0b26ea6b9ab9c114e0ef4c0f6e7b8110b242`** (post-0.23.0) is compiled from
+source during the CMake configure step (see `cmake/FetchThrift.cmake`). Older releases that used pre-built
 `iotdb-tools-thrift` Maven artifacts and `-Diotdb-tools-thrift.version=...`
 for glibc/MSVC compatibility apply only to the **legacy** client-cpp build;
 with the current CMake build, compatibility is determined by the **compiler
@@ -378,15 +378,15 @@ etc. directly.
 
 | Option                | Default                          | Purpose                                                                                                  |
 |-----------------------|----------------------------------|----------------------------------------------------------------------------------------------------------|
-| `WITH_SSL`            | `ON`                             | Link against OpenSSL and bundle its runtime libraries. See *SSL* below.                                  |
+| `WITH_SSL`            | `ON`                             | Link against Tongsuo (OpenSSL-compatible) and bundle its runtime libraries. See *SSL* below.               |
 | `BUILD_TESTING`       | `OFF` (Maven sets `ON` for verify) | Build Catch2 IT executables (Catch2 v2.13.7 header downloaded at configure time).                        |
 | `CATCH2_INCLUDE_DIR`  | (unset)                          | Pre-downloaded Catch2 include dir (Maven sets this under `target/test/catch2`).                          |
 | `IOTDB_OFFLINE`       | `OFF`                            | Disallow any network access during configure.                                                            |
 | `IOTDB_DEPS_DIR`      | `<client-cpp>/third-party`       | Override the local tarball cache directory.                                                              |
 | `BOOST_VERSION`       | `1.60.0` (`1.84.0` on macOS)     | Boost version that CMake will look for / download.                                                       |
-| `THRIFT_VERSION`      | `0.23.0`                         | Apache Thrift version to build from source.                                                              |
+| `THRIFT_GIT_COMMIT`   | `6dfb0b26ea6b9ab9c114e0ef4c0f6e7b8110b242` | Apache Thrift git commit to build from source.                                                  |
+| `TONGSUO_GIT_REF`     | `8.4-stable`                     | Tongsuo git ref built from source when `WITH_SSL=ON`.                                                    |
 | `BOOST_ROOT`          | (unset)                          | Existing Boost install to reuse, equivalent to `-Dboost.include.dir=...` from the legacy build.          |
-| `OPENSSL_ROOT_DIR`    | (unset)                          | Existing OpenSSL install when `WITH_SSL=ON`.                                                             |
 | `CMAKE_INSTALL_PREFIX`| `<build>/install`                | Install location.                                                                                        |
 | `CMAKE_BUILD_TYPE`    | `Release`                        | Single-config generator build type. Use `Debug` to produce a debug library.                              |
 
@@ -427,17 +427,17 @@ cmake --build build --config Release --target install
 
    | Platform   | Required files                                                                                                                                                       |
    |------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-   | `linux/`   | `thrift-0.23.0.tar.gz`, `boost_1_60_0.tar.gz`, `m4-1.4.19.tar.gz`, `flex-2.6.4.tar.gz`, `bison-3.8.tar.gz` (and `openssl-3.5.0.tar.gz` only when `WITH_SSL=ON` and no system OpenSSL is present) |
-   | `mac/`     | `thrift-0.23.0.tar.gz`, `boost_1_84_0.tar.gz` (newer Boost for Xcode/Clang; Apple ships m4/flex/bison; `openssl-3.5.0.tar.gz` optional)                               |
-   | `windows/` | `thrift-0.23.0.tar.gz`, `boost_1_60_0.tar.gz` (Boost headers only - no `b2` build required for `iotdb_session`)                                                      |
+   | `linux/`   | `thrift-6dfb0b26ea6b9ab9c114e0ef4c0f6e7b8110b242.tar.gz`, `boost_1_60_0.tar.gz`, `m4-1.4.19.tar.gz`, `flex-2.6.4.tar.gz`, `bison-3.8.tar.gz`, `tongsuo-8.4-stable.tar.gz` |
+   | `mac/`     | `thrift-6dfb0b26ea6b9ab9c114e0ef4c0f6e7b8110b242.tar.gz`, `boost_1_84_0.tar.gz`, `tongsuo-8.4-stable.tar.gz` (Apple ships m4/flex/bison) |
+   | `windows/` | `thrift-6dfb0b26ea6b9ab9c114e0ef4c0f6e7b8110b242.tar.gz`, `boost_1_60_0.tar.gz` (Boost headers only - no `b2` build required for `iotdb_session`) |
 
    Reference URLs (the configure step uses the same):
-   - Apache Thrift 0.23.0: <https://archive.apache.org/dist/thrift/0.23.0/thrift-0.23.0.tar.gz>
+   - Apache Thrift (git): <https://github.com/apache/thrift/archive/6dfb0b26ea6b9ab9c114e0ef4c0f6e7b8110b242.tar.gz>
    - Boost 1.60.0:        <https://archives.boost.io/release/1.60.0/source/boost_1_60_0.tar.gz>
    - GNU m4 1.4.19:       <https://ftp.gnu.org/gnu/m4/m4-1.4.19.tar.gz>
    - GNU flex 2.6.4:      <https://github.com/westes/flex/releases/download/v2.6.4/flex-2.6.4.tar.gz>
    - GNU bison 3.8:       <https://ftp.gnu.org/gnu/bison/bison-3.8.tar.gz>
-   - OpenSSL 3.5.0:       <https://www.openssl.org/source/openssl-3.5.0.tar.gz>
+   - Tongsuo 8.4-stable: <https://github.com/Tongsuo-Project/Tongsuo/archive/refs/heads/8.4-stable.tar.gz>
 
 2. Run the build with offline mode enabled:
 
@@ -460,8 +460,8 @@ CI environments can share a single cache by setting
 
 ### Linux
 
-- Tested with GCC 7+ and Clang 9+. Anything that can compile Apache Thrift
-  0.23.0 works.
+- Tested with GCC 7+ and Clang 9+. Anything that can compile the pinned Apache
+  Thrift commit works.
 - Build deps that must already exist on the host (only required when
   CMake auto-builds m4/flex/bison from tarball): `make`, `autoconf`,
   `gcc`, plus the standard C/C++ toolchain. `sudo` is **not** required;
@@ -492,11 +492,10 @@ Prerequisites:
 2. **flex / bison.** Install <https://sourceforge.net/projects/winflexbison/>
    and rename `win_flex.exe`→`flex.exe`, `win_bison.exe`→`bison.exe` on
    `PATH`.
-3. **OpenSSL** *(`WITH_SSL=ON` is the default)*: install OpenSSL — e.g.
-   `choco install openssl`, or a Win64 OpenSSL installer from
-   <https://slproweb.com/products/Win32OpenSSL.html> — then pass
-   `-DOPENSSL_ROOT_DIR=...` to CMake if it is not auto-detected. Pass
-   `-DWITH_SSL=OFF` to build without SSL.
+3. **Perl** (for building Tongsuo when `WITH_SSL=ON`).
+4. **Tongsuo / SSL** *(`WITH_SSL=ON` is the default)*: Tongsuo 8.4-stable is
+   always built from source (requires Perl and `nmake` from the VS Developer
+   Command Prompt). Pass `-DWITH_SSL=OFF` to build without SSL.
 
 On Windows the SDK ships as **`iotdb_session.dll`** plus an import library
 **`iotdb_session.lib`**, built with **`/MD`** (dynamic CRT, same as a
@@ -509,27 +508,22 @@ the GNU autotools tarballs assume a POSIX shell environment.
 
 ## SSL
 
-`iotdb_session` builds **with OpenSSL by default** (`WITH_SSL=ON`). Disable
+`iotdb_session` builds **with SSL/TLS by default** (`WITH_SSL=ON`). Disable
 it with `-Dwith.ssl=OFF` (Maven) or `-DWITH_SSL=OFF` (standalone CMake).
 
-OpenSSL **3.x** is used (Apache-2.0 licensed). Note that **OpenSSL 4.0 removed**
-the legacy TLS-method APIs (`TLSv1_method`, `SSLv3_method`, …) that Apache
-Thrift's `TSSLSocket` still calls, so install/point at a 3.x build, not 4.0.
-
-CMake calls `find_package(OpenSSL)` and uses the system OpenSSL it finds. Its
-shared libraries are **bundled into the package `lib/` directory** (next to
+[Tongsuo](https://github.com/Tongsuo-Project/Tongsuo) **8.4-stable** is
+**always built from source** during configure (Apache-2.0 licensed,
+OpenSSL-compatible API). It adds Chinese commercial cipher and TLCP protocol
+support on top of standard TLS. The resulting `libssl` / `libcrypto` shared
+libraries are **bundled into the package `lib/` directory** (next to
 `iotdb_session`, which records an `$ORIGIN`/`@loader_path` runtime path) so the
 published SDK is self-contained.
 
-Fallbacks:
+Host prerequisites when `WITH_SSL=ON`:
 
-- **Linux / macOS** – when no system OpenSSL is found (or
-  `-DIOTDB_OPENSSL_FROM_SOURCE=ON`, which the Linux packaging build uses so the
-  AlmaLinux 8 baseline's OpenSSL 1.1.1 is never redistributed), build
-  `openssl-3.5.0.tar.gz` from source as **shared** libraries and bundle them.
-- **Windows** – fail with a friendly message; install a prebuilt OpenSSL 3.x
-  (e.g. the FireDaemon or slproweb 3.5.x zip) and set `-DOPENSSL_ROOT_DIR=...`.
-  Building OpenSSL from source via MSVC is out of scope.
+- **Linux / macOS** – `perl`, `make`, and a C compiler (Tongsuo `./config`).
+- **Windows** – Perl (e.g. Strawberry Perl) and `nmake` from the Visual Studio
+  Developer Command Prompt.
 
 ## Tests
 

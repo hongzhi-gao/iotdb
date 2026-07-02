@@ -38,7 +38,7 @@
           3. Packages the produced install tree (maven-assembly-plugin)
 
         Everything else - thrift download, code generation, Boost/m4/flex/bison
-        bootstrap, OpenSSL discovery - lives in CMake modules under cmake/.
+        bootstrap, Tongsuo build - lives in CMake modules under cmake/.
     -->
     <properties>
         <catch2.url>https://github.com/catchorg/Catch2/releases/download/v2.13.7/catch.hpp</catch2.url>
@@ -50,7 +50,8 @@
         <iotdb.deps.dir>${project.basedir}/third-party</iotdb.deps.dir>
         <iotdb.offline>OFF</iotdb.offline>
         <with.ssl>ON</with.ssl>
-        <iotdb.openssl.from.source>OFF</iotdb.openssl.from.source>
+        <thrift.git.commit>6dfb0b26ea6b9ab9c114e0ef4c0f6e7b8110b242</thrift.git.commit>
+        <tongsuo.git.ref>8.4-stable</tongsuo.git.ref>
         <iotdb.cxx11.abi/>
         <!-- Switched to OFF by the .skipTests profile below. -->
         <build.tests>ON</build.tests>
@@ -113,7 +114,8 @@
                                 <option>-DCMAKE_INSTALL_PREFIX=${cmake.install.prefix}</option>
                                 <option>-DBUILD_TESTING=${build.tests}</option>
                                 <option>-DWITH_SSL=${with.ssl}</option>
-                                <option>-DIOTDB_OPENSSL_FROM_SOURCE=${iotdb.openssl.from.source}</option>
+                                <option>-DTHRIFT_GIT_COMMIT=${thrift.git.commit}</option>
+                                <option>-DTONGSUO_GIT_REF=${tongsuo.git.ref}</option>
                                 <option>-DIOTDB_OFFLINE=${iotdb.offline}</option>
                                 <option>-DIOTDB_DEPS_DIR=${iotdb.deps.dir}</option>
                                 <option>-DIOTDB_USE_CXX11_ABI=${iotdb.cxx11.abi}</option>

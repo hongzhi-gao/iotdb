@@ -61,21 +61,55 @@ else()
     INCLUDE_DIRECTORIES("${IOTDB_SDK_ROOT}/include")
 endif()
 
-option(WITH_SSL "Build with SSL support" OFF)
+# Match the SDK default (WITH_SSL=ON in the main client build). When this
+# directory is added via add_subdirectory(), the parent cache value wins.
+option(WITH_SSL "Build with SSL/TLS support" ON)
 
-IF(WITH_SSL)
-    FIND_PACKAGE(OpenSSL REQUIRED)
-    IF(OpenSSL_FOUND)
-        MESSAGE(STATUS "OpenSSL found: ${OPENSSL_VERSION}")
-        INCLUDE_DIRECTORIES(${OPENSSL_INCLUDE_DIR})
-        ADD_DEFINITIONS(-DWITH_SSL=1)
-    ELSE()
-        MESSAGE(FATAL_ERROR "OpenSSL not found, but WITH_SSL is enabled")
-    ENDIF()
-ELSE()
-    MESSAGE(STATUS "Building without SSL support")
-    ADD_DEFINITIONS(-DWITH_SSL=0)
-ENDIF()
+set(_iotdb_use_bundled_ssl OFF)
+set(_iotdb_ssl_link_libs "")
+
+if(NOT _iotdb_examples_in_tree)
+    file(GLOB _iotdb_bundled_ssl_runtime
+        "${IOTDB_SDK_ROOT}/lib/libssl*.so*"
+        "${IOTDB_SDK_ROOT}/lib/libcrypto*.so*"
+        "${IOTDB_SDK_ROOT}/lib/libssl*.dylib"
+        "${IOTDB_SDK_ROOT}/lib/libcrypto*.dylib"
+        "${IOTDB_SDK_ROOT}/lib/libssl*.dll"
+        "${IOTDB_SDK_ROOT}/lib/libcrypto*.dll")
+    if(_iotdb_bundled_ssl_runtime)
+        set(_iotdb_use_bundled_ssl ON)
+        set(WITH_SSL ON CACHE BOOL "Build with SSL/TLS support" FORCE)
+        message(STATUS "Using bundled Tongsuo/OpenSSL-compatible libraries from ${IOTDB_SDK_ROOT}/lib")
+    endif()
+endif()
+
+if(WITH_SSL)
+    if(_iotdb_examples_in_tree)
+        add_compile_definitions(WITH_SSL=1)
+    elseif(_iotdb_use_bundled_ssl)
+        add_compile_definitions(WITH_SSL=1)
+        if(UNIX)
+            find_library(_iotdb_ssl_lib NAMES ssl libssl
+                PATHS "${IOTDB_SDK_ROOT}/lib" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+            find_library(_iotdb_crypto_lib NAMES crypto libcrypto
+                PATHS "${IOTDB_SDK_ROOT}/lib" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+            if(_iotdb_ssl_lib AND _iotdb_crypto_lib)
+                set(_iotdb_ssl_link_libs "${_iotdb_ssl_lib}" "${_iotdb_crypto_lib}")
+            else()
+                message(FATAL_ERROR
+                    "Bundled libssl/libcrypto not found under ${IOTDB_SDK_ROOT}/lib")
+            endif()
+        endif()
+    else()
+        message(FATAL_ERROR
+            "WITH_SSL=ON requires building inside the IoTDB client tree, or an SDK "
+            "that bundles libssl/libcrypto under ${IOTDB_SDK_ROOT}/lib. "
+            "Pass -DWITH_SSL=OFF only for SDKs built without SSL.")
+    endif()
+else()
+    message(STATUS "Building without SSL support")
+    add_compile_definitions(WITH_SSL=0)
+endif()
 
 if(NOT _iotdb_examples_in_tree)
     find_package(iotdb-session CONFIG QUIET
@@ -118,35 +152,19 @@ set(_example_targets
     tree_example
     table_example)
 
-# OpenSSL runtime libraries bundled in the SDK lib/ (libssl / libcrypto). When
-# building against an unpacked package, copy them next to each example binary so
-# the examples run without a system OpenSSL - libiotdb_session records them as
-# NEEDED and resolves them via its $ORIGIN runtime path.
-set(_iotdb_sdk_ssl_runtime "")
-if(NOT _iotdb_examples_in_tree)
-    file(GLOB _iotdb_sdk_ssl_runtime
-        "${IOTDB_SDK_ROOT}/lib/libssl*.so*"
-        "${IOTDB_SDK_ROOT}/lib/libcrypto*.so*"
-        "${IOTDB_SDK_ROOT}/lib/libssl*.dylib"
-        "${IOTDB_SDK_ROOT}/lib/libcrypto*.dylib"
-        "${IOTDB_SDK_ROOT}/lib/libssl*.dll"
-        "${IOTDB_SDK_ROOT}/lib/libcrypto*.dll")
-endif()
-
 foreach(_t IN LISTS _example_targets)
-  IF(WITH_SSL)
-      TARGET_LINK_LIBRARIES(${_t} PRIVATE "${_iotdb_link_lib}" OpenSSL::SSL OpenSSL::Crypto)
-  ELSE()
-      TARGET_LINK_LIBRARIES(${_t} PRIVATE "${_iotdb_link_lib}")
-  ENDIF()
+  if(WITH_SSL AND _iotdb_ssl_link_libs)
+      target_link_libraries(${_t} PRIVATE "${_iotdb_link_lib}" ${_iotdb_ssl_link_libs})
+  else()
+      target_link_libraries(${_t} PRIVATE "${_iotdb_link_lib}")
+  endif()
   IF(UNIX)
       TARGET_LINK_LIBRARIES(${_t} PRIVATE pthread)
   ENDIF()
 
-  # The packaged libiotdb_session records the bundled OpenSSL libs as DT_NEEDED;
-  # point the linker at the SDK lib/ so it can resolve them without a system
-  # OpenSSL present.
-  if(UNIX AND NOT _iotdb_examples_in_tree)
+  # The packaged libiotdb_session records the bundled SSL libs as DT_NEEDED; point
+  # the linker at the SDK lib/ so it can resolve them without a system install.
+  if(UNIX AND NOT _iotdb_examples_in_tree AND _iotdb_use_bundled_ssl)
       target_link_directories(${_t} PRIVATE "${IOTDB_SDK_ROOT}/lib")
   endif()
 
@@ -167,11 +185,11 @@ foreach(_t IN LISTS _example_targets)
           COMMAND ${CMAKE_COMMAND} -E copy_if_different
                   "${_iotdb_runtime}" $<TARGET_FILE_DIR:${_t}>
           COMMENT "Copy IoTDB runtime library next to ${_t}")
-      foreach(_ssl_lib IN LISTS _iotdb_sdk_ssl_runtime)
+      foreach(_ssl_lib IN LISTS _iotdb_bundled_ssl_runtime)
           add_custom_command(TARGET ${_t} POST_BUILD
               COMMAND ${CMAKE_COMMAND} -E copy_if_different
                       "${_ssl_lib}" $<TARGET_FILE_DIR:${_t}>
-              COMMENT "Copy bundled OpenSSL runtime next to ${_t}")
+              COMMENT "Copy bundled SSL runtime next to ${_t}")
       endforeach()
   elseif(WIN32)
       message(WARNING "Missing ${_iotdb_runtime}; copy iotdb_session.dll manually before running ${_t}.")
@@ -194,9 +212,8 @@ if(EXISTS "${_iotdb_runtime}")
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_iotdb_runtime}" "${_example_dist_dir}/")
 endif()
-# Stage the bundled OpenSSL runtime too, so a copied dist/ runs on a machine
-# without a system OpenSSL.
-foreach(_ssl_lib IN LISTS _iotdb_sdk_ssl_runtime)
+# Stage the bundled SSL runtime too, so a copied dist/ runs without a system SSL.
+foreach(_ssl_lib IN LISTS _iotdb_bundled_ssl_runtime)
     add_custom_command(TARGET example-dist POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${_ssl_lib}" "${_example_dist_dir}/")

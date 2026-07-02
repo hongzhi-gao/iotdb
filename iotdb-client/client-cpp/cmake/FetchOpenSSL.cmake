@@ -18,81 +18,57 @@
 # =============================================================================
 # FetchOpenSSL.cmake  (only included when WITH_SSL=ON)
 #
-# Apache Thrift 0.23 (bundled by this client) builds against OpenSSL 1.x and 3.x,
-# so any system OpenSSL is used as-is, whatever its version.
-#
-# Resolution order:
-#   1. find_package(OpenSSL) - any system / vendor install is taken as-is.
-#   2. On Linux/macOS, when no system OpenSSL is present:
-#         use tarball ${IOTDB_OS_DEPS_DIR}/openssl-${OPENSSL_FALLBACK_VERSION}.tar.gz
-#         or download from openssl.org when not in offline mode, then
-#         ./config && make && make install_sw into ${CMAKE_BINARY_DIR}/_deps/openssl.
-#   3. On Windows: emit a FATAL_ERROR asking for a prebuilt OpenSSL; building
-#      OpenSSL from source on MSVC is out of scope.
+# Builds Tongsuo (OpenSSL-compatible, Apache-2.0) from source for Thrift
+# TSSLSocket and iotdb_session. Tongsuo adds Chinese commercial cipher / TLCP
+# support on top of the standard TLS stack.
 #
 # Side effects:
-#   Defines imported targets OpenSSL::SSL / OpenSSL::Crypto via find_package
-#   so callers can just link against them.
+#   Sets OPENSSL_ROOT_DIR to the local Tongsuo install tree, then defines
+#   imported targets OpenSSL::SSL / OpenSSL::Crypto via find_package so callers
+#   can link against them unchanged.
 # =============================================================================
 
-# Version built from source when no system OpenSSL is found. Named distinctly
-# from find_package's OPENSSL_VERSION output variable to avoid collisions.
-set(OPENSSL_FALLBACK_VERSION "3.5.0"
-    CACHE STRING "OpenSSL version built from source when no system OpenSSL is found")
-
-# Build OpenSSL from source even if a system one exists. Used by the Linux
-# packaging build, whose AlmaLinux 8 baseline ships OpenSSL 1.1.1 (EOL, not
-# Apache-2.0, must not be redistributed) - we build 3.x there instead.
-option(IOTDB_OPENSSL_FROM_SOURCE
-        "Ignore any system OpenSSL and build OpenSSL ${OPENSSL_FALLBACK_VERSION} from source" OFF)
-
-if(NOT IOTDB_OPENSSL_FROM_SOURCE)
-    find_package(OpenSSL QUIET)
-    if(OpenSSL_FOUND)
-        message(STATUS "[OpenSSL] using system OpenSSL ${OPENSSL_VERSION}")
-        return()
-    endif()
+# --- Build Tongsuo ${TONGSUO_GIT_REF} from source ---
+if(TONGSUO_GIT_REF MATCHES "^[0-9a-fA-F]{7,40}$")
+    set(_tongsuo_extracted_dir "Tongsuo-${TONGSUO_GIT_REF}")
+    set(_tongsuo_url "https://github.com/Tongsuo-Project/Tongsuo/archive/${TONGSUO_GIT_REF}.tar.gz")
+else()
+    set(_tongsuo_extracted_dir "Tongsuo-${TONGSUO_GIT_REF}")
+    set(_tongsuo_url
+            "https://github.com/Tongsuo-Project/Tongsuo/archive/refs/heads/${TONGSUO_GIT_REF}.tar.gz")
 endif()
 
-if(WIN32)
-    message(FATAL_ERROR
-            "[OpenSSL] WITH_SSL=ON but no OpenSSL was found on Windows. "
-            "Please install a prebuilt OpenSSL (e.g. 'choco install openssl'), "
-            "then re-run the configure step with -DOPENSSL_ROOT_DIR=<install_path>. "
-            "Pass -DWITH_SSL=OFF to build without SSL.")
-endif()
+set(_tongsuo_tarname "tongsuo-${TONGSUO_GIT_REF}.tar.gz")
+set(_tongsuo_tarball "${IOTDB_OS_DEPS_DIR}/${_tongsuo_tarname}")
 
-# --- Linux / macOS: build OpenSSL ${OPENSSL_FALLBACK_VERSION} from source -
-set(_ossl_tarname "openssl-${OPENSSL_FALLBACK_VERSION}.tar.gz")
-set(_ossl_tarball "${IOTDB_OS_DEPS_DIR}/${_ossl_tarname}")
-
-if(NOT EXISTS "${_ossl_tarball}")
+if(NOT EXISTS "${_tongsuo_tarball}")
     if(IOTDB_OFFLINE)
         message(FATAL_ERROR
-                "[OpenSSL] IOTDB_OFFLINE=ON but ${_ossl_tarname} is missing in ${IOTDB_OS_DEPS_DIR}.")
+                "[Tongsuo] IOTDB_OFFLINE=ON but ${_tongsuo_tarname} is missing in ${IOTDB_OS_DEPS_DIR}.")
     endif()
-    set(_ossl_url "https://www.openssl.org/source/${_ossl_tarname}")
-    message(STATUS "[OpenSSL] downloading ${_ossl_url}")
-    file(DOWNLOAD "${_ossl_url}" "${_ossl_tarball}"
-            SHOW_PROGRESS TLS_VERIFY ON STATUS _st)
+    message(STATUS "[Tongsuo] downloading ${_tongsuo_url}")
+    file(DOWNLOAD "${_tongsuo_url}" "${_tongsuo_tarball}"
+            SHOW_PROGRESS TLS_VERIFY ON
+            TIMEOUT 600
+            STATUS _st)
     list(GET _st 0 _code)
     if(NOT _code EQUAL 0)
         list(GET _st 1 _msg)
-        file(REMOVE "${_ossl_tarball}")
-        message(FATAL_ERROR "[OpenSSL] download failed: ${_msg}")
+        file(REMOVE "${_tongsuo_tarball}")
+        message(FATAL_ERROR "[Tongsuo] download failed: ${_msg}")
     endif()
 endif()
 
-set(_ossl_root  "${CMAKE_BINARY_DIR}/_deps/openssl")
-set(_ossl_src   "${_ossl_root}/src/openssl-${OPENSSL_FALLBACK_VERSION}")
-set(_ossl_inst  "${_ossl_root}/install")
-set(_ossl_stamp "${_ossl_root}/.built-${OPENSSL_FALLBACK_VERSION}")
+set(_tongsuo_root  "${CMAKE_BINARY_DIR}/_deps/tongsuo")
+set(_tongsuo_src   "${_tongsuo_root}/src/${_tongsuo_extracted_dir}")
+set(_tongsuo_inst  "${_tongsuo_root}/install")
+set(_tongsuo_stamp "${_tongsuo_root}/.built-${TONGSUO_GIT_REF}")
 
-if(NOT EXISTS "${_ossl_stamp}")
-    file(REMOVE_RECURSE "${_ossl_root}/src")
-    file(MAKE_DIRECTORY "${_ossl_root}/src")
-    message(STATUS "[OpenSSL] extracting ${_ossl_tarball}")
-    file(ARCHIVE_EXTRACT INPUT "${_ossl_tarball}" DESTINATION "${_ossl_root}/src")
+if(NOT EXISTS "${_tongsuo_stamp}")
+    file(REMOVE_RECURSE "${_tongsuo_root}/src")
+    file(MAKE_DIRECTORY "${_tongsuo_root}/src")
+    message(STATUS "[Tongsuo] extracting ${_tongsuo_tarball}")
+    file(ARCHIVE_EXTRACT INPUT "${_tongsuo_tarball}" DESTINATION "${_tongsuo_root}/src")
 
     include(ProcessorCount)
     ProcessorCount(_jobs)
@@ -100,38 +76,67 @@ if(NOT EXISTS "${_ossl_stamp}")
         set(_jobs 1)
     endif()
 
-    message(STATUS "[OpenSSL] configuring -> ${_ossl_inst}")
-    # ./config auto-detects the platform target. Build SHARED libraries
-    # (libssl.so.3 / libcrypto.so.3) so they can be bundled next to
-    # libiotdb_session and shipped as the SDK's OpenSSL runtime.
-    execute_process(
-            COMMAND ./config --prefix=${_ossl_inst} --openssldir=${_ossl_inst}/ssl shared
-            WORKING_DIRECTORY "${_ossl_src}"
-            RESULT_VARIABLE _rc)
-    if(NOT _rc EQUAL 0)
-        message(FATAL_ERROR "[OpenSSL] config failed (rc=${_rc})")
-    endif()
+    if(WIN32)
+        find_program(PERL_EXECUTABLE perl REQUIRED)
+        set(_tongsuo_target "VC-WIN64A")
+        message(STATUS "[Tongsuo] configuring (${_tongsuo_target}) -> ${_tongsuo_inst}")
+        execute_process(
+                COMMAND "${PERL_EXECUTABLE}" Configure enable-ntls no-asm ${_tongsuo_target}
+                        --prefix=${_tongsuo_inst}
+                        --openssldir=${_tongsuo_inst}/ssl
+                WORKING_DIRECTORY "${_tongsuo_src}"
+                RESULT_VARIABLE _rc)
+        if(NOT _rc EQUAL 0)
+            message(FATAL_ERROR "[Tongsuo] Configure failed (rc=${_rc})")
+        endif()
 
-    message(STATUS "[OpenSSL] building (-j${_jobs})")
-    execute_process(
-            COMMAND make -j${_jobs}
-            WORKING_DIRECTORY "${_ossl_src}"
-            RESULT_VARIABLE _rc)
-    if(NOT _rc EQUAL 0)
-        message(FATAL_ERROR "[OpenSSL] make failed (rc=${_rc})")
-    endif()
+        message(STATUS "[Tongsuo] building")
+        execute_process(
+                COMMAND nmake
+                WORKING_DIRECTORY "${_tongsuo_src}"
+                RESULT_VARIABLE _rc)
+        if(NOT _rc EQUAL 0)
+            message(FATAL_ERROR "[Tongsuo] nmake failed (rc=${_rc})")
+        endif()
 
-    execute_process(
-            COMMAND make install_sw
-            WORKING_DIRECTORY "${_ossl_src}"
-            RESULT_VARIABLE _rc)
-    if(NOT _rc EQUAL 0)
-        message(FATAL_ERROR "[OpenSSL] make install_sw failed (rc=${_rc})")
+        execute_process(
+                COMMAND nmake install_sw
+                WORKING_DIRECTORY "${_tongsuo_src}"
+                RESULT_VARIABLE _rc)
+        if(NOT _rc EQUAL 0)
+            message(FATAL_ERROR "[Tongsuo] nmake install_sw failed (rc=${_rc})")
+        endif()
+    else()
+        message(STATUS "[Tongsuo] configuring -> ${_tongsuo_inst}")
+        execute_process(
+                COMMAND ./config --prefix=${_tongsuo_inst} --openssldir=${_tongsuo_inst}/ssl shared enable-ntls
+                WORKING_DIRECTORY "${_tongsuo_src}"
+                RESULT_VARIABLE _rc)
+        if(NOT _rc EQUAL 0)
+            message(FATAL_ERROR "[Tongsuo] config failed (rc=${_rc})")
+        endif()
+
+        message(STATUS "[Tongsuo] building (-j${_jobs})")
+        execute_process(
+                COMMAND make -j${_jobs}
+                WORKING_DIRECTORY "${_tongsuo_src}"
+                RESULT_VARIABLE _rc)
+        if(NOT _rc EQUAL 0)
+            message(FATAL_ERROR "[Tongsuo] make failed (rc=${_rc})")
+        endif()
+
+        execute_process(
+                COMMAND make install_sw
+                WORKING_DIRECTORY "${_tongsuo_src}"
+                RESULT_VARIABLE _rc)
+        if(NOT _rc EQUAL 0)
+            message(FATAL_ERROR "[Tongsuo] make install_sw failed (rc=${_rc})")
+        endif()
     endif()
-    file(TOUCH "${_ossl_stamp}")
+    file(TOUCH "${_tongsuo_stamp}")
 endif()
 
-set(OPENSSL_ROOT_DIR "${_ossl_inst}" CACHE PATH "OpenSSL root" FORCE)
+set(OPENSSL_ROOT_DIR "${_tongsuo_inst}" CACHE PATH "Tongsuo install root" FORCE)
 set(OPENSSL_USE_STATIC_LIBS OFF)
 find_package(OpenSSL REQUIRED)
-message(STATUS "[OpenSSL] built locally (shared) at ${OPENSSL_ROOT_DIR}")
+message(STATUS "[Tongsuo] built from source (shared) at ${OPENSSL_ROOT_DIR}")

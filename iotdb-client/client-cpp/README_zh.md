@@ -243,10 +243,10 @@ Maven 构建会把 SDK 安装到 `target/install/`，并生成
 | `BOOST_INCLUDEDIR` | `boost.include.dir` |
 | `CMAKE_BUILD_TYPE` | `cmake.build.type`，例如 `-Dcmake.build.type=Debug` |
 
-SSL 默认开启（`WITH_SSL=ON`）。所捆绑的 Apache Thrift 0.23 同时支持 OpenSSL 1.x
-与 3.x，因此直接使用系统的 OpenSSL（任意版本）。CMake 通过 `find_package(OpenSSL)`
-解析系统 OpenSSL，找不到时回退到从源码构建 OpenSSL 3.5.0；并会把所用的 OpenSSL
-动态库一并复制到产物 `lib/` 目录。Windows 可用 `choco install openssl` 安装。
+SSL 默认开启（`WITH_SSL=ON`）。配置阶段**始终从源码构建**
+[Tongsuo](https://github.com/Tongsuo-Project/Tongsuo) **8.4-stable**
+（OpenSSL 兼容 API，Apache-2.0，支持国密/TLCP），并把 `libssl`/`libcrypto`
+动态库复制到产物 `lib/` 目录。Windows 需要 Perl 与 VS 的 `nmake`。
 直接使用 CMake 时传入 `-DWITH_SSL=OFF`、`-DIOTDB_OFFLINE=ON` 等即可。
 Debug 构建请在配置阶段传入 `-DCMAKE_BUILD_TYPE=Debug`。Windows 使用 Visual
 Studio 生成器时也需要传入该选项，以便内置 Thrift 静态库使用 Debug MSVC 运行时；

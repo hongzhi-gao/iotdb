@@ -61,8 +61,9 @@ pre-built Thrift workflow only. Linux release packages are built in the
 
 ## SDK layout (after unpack)
 
-The SDK zip produced by `client-cpp` contains **public headers only** and one
-shared library:
+The SDK zip produced by `client-cpp` contains **public headers**, the
+`iotdb_session` shared library, and (when built with SSL, the default)
+**bundled Tongsuo** runtime libraries (`libssl` / `libcrypto`):
 
 ```
 client/
@@ -73,7 +74,9 @@ client/
 └── lib/
     ├── iotdb_session.dll + iotdb_session.lib   (Windows)
     ├── libiotdb_session.so                     (Linux)
-    └── libiotdb_session.dylib                  (macOS)
+    ├── libiotdb_session.dylib                  (macOS)
+    ├── libssl-3-x64.dll + libcrypto-3-x64.dll  (Windows SSL runtime, when WITH_SSL=ON)
+    └── libssl.so* + libcrypto.so*              (Linux/macOS SSL runtime, when WITH_SSL=ON)
 ```
 
 ## Build the examples
@@ -106,6 +109,10 @@ cmake -S iotdb-client/client-cpp/examples -B build \
 cmake --build build
 ```
 
+When the SDK bundles `libssl` / `libcrypto` under `lib/` (default `WITH_SSL=ON`
+builds), CMake detects them automatically. A system OpenSSL install is not used.
+Pass `-DWITH_SSL=OFF` only for SDKs built without SSL.
+
 Windows (Visual Studio generator):
 
 ```powershell
@@ -122,6 +129,7 @@ Optional staging folder for deployment:
 ```bash
 cmake --build build --target example-dist
 # -> build/dist/ contains all example binaries + libiotdb_session.{so,dll,dylib}
+#    and bundled libssl/libcrypto when WITH_SSL=ON
 ```
 
 ## Run on a clean machine (no compiler, no IoTDB SDK headers)
@@ -142,9 +150,12 @@ Copy either from `build/.../Release/` (Windows) / `build/` (Ninja/Make) or from
 ```
 SessionExample.exe
 iotdb_session.dll
+libssl-3-x64.dll
+libcrypto-3-x64.dll
 ```
 
-(Repeat for the other example names if needed.)
+(Repeat for the other example names if needed. Exact SSL DLL names follow the
+Tongsuo major version bundled in your SDK zip.)
 
 **Prerequisites on the target PC**
 
@@ -164,8 +175,9 @@ iotdb_session.dll
 If you see “The code execution cannot proceed because VCRUNRuntime140.dll was
 missing”, install the VC++ redistributable above.
 
-You do **not** need a separate Thrift or Boost runtime; they are inside
-`iotdb_session.dll`.
+You do **not** need a separate Thrift, Boost, or system OpenSSL runtime; Thrift
+and Boost are inside `iotdb_session.dll`, and SSL is provided by the bundled
+Tongsuo libraries copied above.
 
 ### Linux
 
@@ -174,8 +186,13 @@ You do **not** need a separate Thrift or Boost runtime; they are inside
 ```
 SessionExample
 libiotdb_session.so
+libssl.so*
+libcrypto.so*
 chmod +x SessionExample
 ```
+
+Copy the `libssl` / `libcrypto` soname files that ship next to
+`libiotdb_session.so` in the SDK `lib/` directory (Tongsuo, OpenSSL-compatible).
 
 **Prerequisites on the target machine**
 
