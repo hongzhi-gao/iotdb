@@ -17,6 +17,7 @@
  * under the License.
  */
 #include "ThriftConnection.h"
+#include "RpcSslUtils.h"
 #include <ctime>
 #include <iostream>
 #include <thrift/protocol/TBinaryProtocol.h>
@@ -64,13 +65,11 @@ void ThriftConnection::initZoneId() {
 }
 
 void ThriftConnection::init(const std::string& username, const std::string& password,
-                            bool enableRPCCompression, bool useSSL,
-                            const std::string& trustCertFilePath, const std::string& zoneId,
-                            const std::string& version) {
-  if (useSSL) {
+                            bool enableRPCCompression, const SslConfig& sslConfig,
+                            const std::string& zoneId, const std::string& version) {
+  if (sslConfig.useSsl) {
 #if WITH_SSL
-    socketFactory_->loadTrustedCertificates(trustCertFilePath.c_str());
-    socketFactory_->authenticate(false);
+    socketFactory_ = RpcSslUtils::createSslSocketFactory(sslConfig);
     auto sslSocket = socketFactory_->createSocket(endPoint_.ip, endPoint_.port);
     sslSocket->setConnTimeout(connectionTimeoutInMs_);
     transport_ = std::make_shared<TFramedTransport>(sslSocket);

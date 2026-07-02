@@ -27,6 +27,7 @@
 #include <unordered_set>
 #include <thrift/transport/TTransportException.h>
 #include "SessionImpl.h"
+#include "RpcSslUtils.h"
 #include "SessionDataSet.h"
 #include "ThriftConvert.h"
 
@@ -541,8 +542,13 @@ Session::Session(AbstractSessionBuilder* builder) : impl_(new Impl()) {
   impl_->enableRedirection_ = builder->enableRedirections;
   impl_->connectTimeoutMs_ = builder->connectTimeoutMs;
   impl_->nodeUrls_ = builder->nodeUrls;
-  impl_->useSSL_ = builder->useSSL;
-  impl_->trustCertFilePath_ = builder->trustCertFilePath;
+  impl_->sslConfig_.useSsl = builder->useSSL;
+  impl_->sslConfig_.sslProtocol = builder->sslProtocol;
+  impl_->sslConfig_.trustStore = builder->trustStore;
+  impl_->sslConfig_.trustStorePwd = builder->trustStorePwd;
+  impl_->sslConfig_.keyStore = builder->keyStore;
+  impl_->sslConfig_.keyStorePwd = builder->keyStorePwd;
+  impl_->sslConfig_.trustCertFilePath = builder->trustCertFilePath;
   impl_->initZoneId();
   impl_->initNodesSupplier(impl_->nodeUrls_);
 }
@@ -553,6 +559,13 @@ void Session::setSqlDialect(const std::string& dialect) {
 
 void Session::setDatabase(const std::string& database) {
   impl_->database_ = database;
+}
+
+void Session::setSslConfig(const SslConfig& sslConfig) {
+  if (!impl_->isClosed_) {
+    throw IoTDBException("Cannot change SSL configuration after Session is opened.");
+  }
+  impl_->sslConfig_ = sslConfig;
 }
 
 std::string Session::getDatabase() {
@@ -871,7 +884,7 @@ void Session::Impl::initNodesSupplier(const std::vector<std::string>& nodeUrls) 
 
   if (enableAutoFetch_) {
     nodesSupplier_ =
-        NodesSupplier::create(endPoints, username_, password_, useSSL_, trustCertFilePath_);
+        NodesSupplier::create(endPoints, username_, password_, sslConfig_);
   } else {
     nodesSupplier_ = make_shared<StaticNodesSupplier>(endPoints);
   }

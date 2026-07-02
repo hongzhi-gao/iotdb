@@ -248,6 +248,28 @@ version should be **≥ the deployment target used to build the SDK**. Check wit
 otool -L SessionExample
 ```
 
+## SSL / TLCP examples
+
+When connecting to an SSL-enabled IoTDB DataNode, configure the session builder
+before `build()`:
+
+```cpp
+SessionBuilder()
+    .host("127.0.0.1")
+    ->rpcPort(6667)
+    ->useSSL(true)
+    ->sslProtocol("TLS")              // or "TLCP" for NTLS / GM/T
+    ->trustStore("/path/to/ca.p12")
+    ->trustStorePwd("thrift")
+    ->keyStore("/path/to/client.p12") // optional, mutual auth
+    ->keyStorePwd("thrift")
+    ->build();
+```
+
+Use PKCS12 stores (convert JKS with `keytool -importkeystore`). See the main
+[README.md](../README.md#client-ssl--tlcp-configuration) for TLS and TLCP
+details.
+
 ## Development notes
 
 - **Windows**: Application and SDK both use **`/MD`** (dynamic CRT). This

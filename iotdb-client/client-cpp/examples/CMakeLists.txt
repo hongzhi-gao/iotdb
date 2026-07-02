@@ -180,6 +180,15 @@ foreach(_t IN LISTS _example_targets)
           COMMAND ${CMAKE_COMMAND} -E copy_if_different
                   $<TARGET_FILE:iotdb_session> $<TARGET_FILE_DIR:${_t}>
           COMMENT "Copy IoTDB runtime library next to ${_t}")
+      if(WIN32 AND WITH_SSL)
+          _iotdb_collect_openssl_windows_dlls(_iotdb_ssl_runtime_dlls)
+          foreach(_ssl_dll IN LISTS _iotdb_ssl_runtime_dlls)
+              add_custom_command(TARGET ${_t} POST_BUILD
+                  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                          "${_ssl_dll}" $<TARGET_FILE_DIR:${_t}>
+                  COMMENT "Copy bundled SSL runtime next to ${_t}")
+          endforeach()
+      endif()
   elseif(EXISTS "${_iotdb_runtime}")
       add_custom_command(TARGET ${_t} POST_BUILD
           COMMAND ${CMAKE_COMMAND} -E copy_if_different

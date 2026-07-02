@@ -24,6 +24,7 @@
 #include <thrift/transport/TSSLSocket.h>
 #endif
 #include "IClientRPCService.h"
+#include "RpcSslUtils.h"
 #include "SessionConfig.h"
 
 class SessionDataSet;
@@ -43,9 +44,8 @@ public:
   ~ThriftConnection();
 
   void init(const std::string& username, const std::string& password,
-            bool enableRPCCompression = false, bool useSSL = false,
-            const std::string& trustCertFilePath = "", const std::string& zoneId = std::string(),
-            const std::string& version = "V_1_0");
+            bool enableRPCCompression = false, const SslConfig& sslConfig = SslConfig(),
+            const std::string& zoneId = std::string(), const std::string& version = "V_1_0");
 
   std::unique_ptr<SessionDataSet> executeQueryStatement(const std::string& sql,
                                                         int64_t timeoutInMs = -1);

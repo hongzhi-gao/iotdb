@@ -188,6 +188,11 @@ public:
   SessionPool& setWaitToGetSessionTimeoutMs(int64_t timeoutMs);
   SessionPool& setUseSSL(bool useSSL);
   SessionPool& setTrustCertFilePath(std::string path);
+  SessionPool& setSslProtocol(std::string sslProtocol);
+  SessionPool& setTrustStore(std::string trustStore);
+  SessionPool& setTrustStorePwd(std::string trustStorePwd);
+  SessionPool& setKeyStore(std::string keyStore);
+  SessionPool& setKeyStorePwd(std::string keyStorePwd);
 
   // Borrow a Session. Blocks until one is free or a new one can be created,
   // up to timeoutMs (<= 0 means use the pool default). Throws IoTDBException on
@@ -249,6 +254,11 @@ private:
   int connectTimeoutMs_ = AbstractSessionBuilder::DEFAULT_CONNECT_TIMEOUT_MS;
   bool useSSL_ = false;
   std::string trustCertFilePath_;
+  std::string sslProtocol_ = "TLS";
+  std::string trustStore_;
+  std::string trustStorePwd_;
+  std::string keyStore_;
+  std::string keyStorePwd_;
 
   // pool sizing / waiting policy
   size_t maxSize_;
@@ -339,6 +349,26 @@ public:
     AbstractSessionBuilder::trustCertFilePath = v;
     return this;
   }
+  SessionPoolBuilder* sslProtocol(const std::string& v) {
+    AbstractSessionBuilder::sslProtocol = v;
+    return this;
+  }
+  SessionPoolBuilder* trustStore(const std::string& v) {
+    AbstractSessionBuilder::trustStore = v;
+    return this;
+  }
+  SessionPoolBuilder* trustStorePwd(const std::string& v) {
+    AbstractSessionBuilder::trustStorePwd = v;
+    return this;
+  }
+  SessionPoolBuilder* keyStore(const std::string& v) {
+    AbstractSessionBuilder::keyStore = v;
+    return this;
+  }
+  SessionPoolBuilder* keyStorePwd(const std::string& v) {
+    AbstractSessionBuilder::keyStorePwd = v;
+    return this;
+  }
   SessionPoolBuilder* maxSize(size_t v) {
     maxSize_ = v;
     return this;
@@ -380,7 +410,12 @@ public:
         .setConnectTimeoutMs(AbstractSessionBuilder::connectTimeoutMs)
         .setWaitToGetSessionTimeoutMs(waitTimeoutMs_)
         .setUseSSL(AbstractSessionBuilder::useSSL)
-        .setTrustCertFilePath(AbstractSessionBuilder::trustCertFilePath);
+        .setTrustCertFilePath(AbstractSessionBuilder::trustCertFilePath)
+        .setSslProtocol(AbstractSessionBuilder::sslProtocol)
+        .setTrustStore(AbstractSessionBuilder::trustStore)
+        .setTrustStorePwd(AbstractSessionBuilder::trustStorePwd)
+        .setKeyStore(AbstractSessionBuilder::keyStore)
+        .setKeyStorePwd(AbstractSessionBuilder::keyStorePwd);
     return pool;
   }
 

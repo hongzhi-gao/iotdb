@@ -248,6 +248,64 @@ SSL 默认开启（`WITH_SSL=ON`）。配置阶段**始终从源码构建**
 （OpenSSL 兼容 API，Apache-2.0，支持国密/TLCP），并把 `libssl`/`libcrypto`
 动态库复制到产物 `lib/` 目录。Windows 需要 Perl 与 VS 的 `nmake`。
 直接使用 CMake 时传入 `-DWITH_SSL=OFF`、`-DIOTDB_OFFLINE=ON` 等即可。
+
+### 客户端 SSL / TLCP 配置
+
+C++ 客户端 API 与 Java Session 对齐。`trustStore` 与 `keyStore` 请使用
+**PKCS12**（`.p12` / `.pfx`）。JKS 需先转换为 PKCS12（C++ 端不解析 JKS）。
+
+**TLS 单向认证：**
+
+```cpp
+auto session = SessionBuilder()
+                   .host("127.0.0.1")
+                   ->rpcPort(6667)
+                   ->useSSL(true)
+                   ->sslProtocol("TLS")
+                   ->trustStore("/path/to/truststore.p12")
+                   ->trustStorePwd("thrift")
+                   ->build();
+```
+
+**TLCP 单向认证（国密 NTLS）：**
+
+```cpp
+auto session = SessionBuilder()
+                   .host("127.0.0.1")
+                   ->rpcPort(6667)
+                   ->useSSL(true)
+                   ->sslProtocol("TLCP")
+                   ->trustStore("/path/to/ca.p12")
+                   ->trustStorePwd("thrift")
+                   ->build();
+```
+
+**TLCP 双向认证**（PKCS12 `keyStore` 内含 SM2 签名/加密双证书）：
+
+```cpp
+auto session = SessionBuilder()
+                   .host("127.0.0.1")
+                   ->rpcPort(6667)
+                   ->useSSL(true)
+                   ->sslProtocol("TLCP")
+                   ->trustStore("/path/to/ca.p12")
+                   ->trustStorePwd("thrift")
+                   ->keyStore("/path/to/client-dual.p12")
+                   ->keyStorePwd("thrift")
+                   ->build();
+```
+
+旧版 `trustCertFilePath()` 在未设置 `trustStore` 时仍可作为 PEM CA 路径使用。
+
+**C API**（在 `ts_session_open` / `ts_table_session_open` 之前配置）：
+
+```c
+ts_session_set_use_ssl(session, true);
+ts_session_set_ssl_protocol(session, "TLCP");
+ts_session_set_trust_store(session, "/path/to/ca.p12", "thrift");
+ts_session_set_key_store(session, "/path/to/client-dual.p12", "thrift");
+```
+
 Debug 构建请在配置阶段传入 `-DCMAKE_BUILD_TYPE=Debug`。Windows 使用 Visual
 Studio 生成器时也需要传入该选项，以便内置 Thrift 静态库使用 Debug MSVC 运行时；
 随后用 `cmake --build build --config Debug --target install` 构建安装。

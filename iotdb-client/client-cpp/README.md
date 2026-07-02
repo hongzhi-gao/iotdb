@@ -525,6 +525,86 @@ Host prerequisites when `WITH_SSL=ON`:
 - **Windows** – Perl (e.g. Strawberry Perl) and `nmake` from the Visual Studio
   Developer Command Prompt.
 
+### Client SSL / TLCP configuration
+
+The C++ client mirrors the Java Session API. Use **PKCS12** (`.p12` / `.pfx`)
+for `trustStore` and `keyStore`. JKS files must be converted to PKCS12 first
+(the C++ client does not parse JKS).
+
+**TLS one-way (server authentication):**
+
+```cpp
+#include "SessionBuilder.h"
+
+auto session = SessionBuilder()
+                   .host("127.0.0.1")
+                   ->rpcPort(6667)
+                   ->username("root")
+                   ->password("root")
+                   ->useSSL(true)
+                   ->sslProtocol("TLS")
+                   ->trustStore("/path/to/truststore.p12")
+                   ->trustStorePwd("thrift")
+                   ->build();
+```
+
+**TLS mutual authentication:**
+
+```cpp
+auto session = SessionBuilder()
+                   .host("127.0.0.1")
+                   ->rpcPort(6667)
+                   ->useSSL(true)
+                   ->sslProtocol("TLS")
+                   ->trustStore("/path/to/truststore.p12")
+                   ->trustStorePwd("thrift")
+                   ->keyStore("/path/to/keystore.p12")
+                   ->keyStorePwd("thrift")
+                   ->build();
+```
+
+**TLCP one-way (NTLS, GM/T):**
+
+```cpp
+auto session = SessionBuilder()
+                   .host("127.0.0.1")
+                   ->rpcPort(6667)
+                   ->useSSL(true)
+                   ->sslProtocol("TLCP")
+                   ->trustStore("/path/to/ca.p12")
+                   ->trustStorePwd("thrift")
+                   ->build();
+```
+
+**TLCP mutual authentication** (dual SM2 certificates in PKCS12 `keyStore`):
+
+```cpp
+auto session = SessionBuilder()
+                   .host("127.0.0.1")
+                   ->rpcPort(6667)
+                   ->useSSL(true)
+                   ->sslProtocol("TLCP")
+                   ->trustStore("/path/to/ca.p12")
+                   ->trustStorePwd("thrift")
+                   ->keyStore("/path/to/client-dual.p12")
+                   ->keyStorePwd("thrift")
+                   ->build();
+```
+
+The legacy `trustCertFilePath()` setter still works as an alias for a PEM CA
+file when `trustStore` is not set.
+
+**C API** (configure before `ts_session_open` / `ts_table_session_open`):
+
+```c
+CSession* session = ts_session_new("127.0.0.1", 6667, "root", "root");
+ts_session_set_use_ssl(session, true);
+ts_session_set_ssl_protocol(session, "TLCP");
+ts_session_set_trust_store(session, "/path/to/ca.p12", "thrift");
+ts_session_set_key_store(session, "/path/to/client-dual.p12", "thrift");
+ts_session_open(session);
+```
+
 ## Tests
 
 Maven binds `cmake-maven-plugin`'s `test` goal to the `integration-test`

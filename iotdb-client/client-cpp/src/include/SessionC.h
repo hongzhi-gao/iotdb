@@ -131,6 +131,15 @@ TsStatus ts_session_open_with_compression(CSession* session, bool enableRPCCompr
 
 TsStatus ts_session_close(CSession* session);
 
+TsStatus ts_session_set_use_ssl(CSession* session, bool useSsl);
+TsStatus ts_session_set_ssl_protocol(CSession* session, const char* sslProtocol);
+TsStatus ts_session_set_trust_store(CSession* session, const char* trustStore,
+                                    const char* trustStorePwd);
+TsStatus ts_session_set_key_store(CSession* session, const char* keyStore,
+                                  const char* keyStorePwd);
+/** @deprecated Use ts_session_set_trust_store() instead. */
+TsStatus ts_session_set_trust_cert_file_path(CSession* session, const char* trustCertFilePath);
+
 /* ============================================================
  *  Session Lifecycle  —  Table Model
  * ============================================================ */
@@ -147,6 +156,16 @@ void ts_table_session_destroy(CTableSession* session);
 TsStatus ts_table_session_open(CTableSession* session);
 
 TsStatus ts_table_session_close(CTableSession* session);
+
+TsStatus ts_table_session_set_use_ssl(CTableSession* session, bool useSsl);
+TsStatus ts_table_session_set_ssl_protocol(CTableSession* session, const char* sslProtocol);
+TsStatus ts_table_session_set_trust_store(CTableSession* session, const char* trustStore,
+                                          const char* trustStorePwd);
+TsStatus ts_table_session_set_key_store(CTableSession* session, const char* keyStore,
+                                        const char* keyStorePwd);
+/** @deprecated Use ts_table_session_set_trust_store() instead. */
+TsStatus ts_table_session_set_trust_cert_file_path(CTableSession* session,
+                                                   const char* trustCertFilePath);
 
 /* ============================================================
  *  Timezone

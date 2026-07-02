@@ -242,6 +242,26 @@ export LD_LIBRARY_PATH=.
 otool -L SessionExample
 ```
 
+## SSL / TLCP 示例
+
+连接已启用 SSL 的 DataNode 时，在 `build()` 前配置：
+
+```cpp
+SessionBuilder()
+    .host("127.0.0.1")
+    ->rpcPort(6667)
+    ->useSSL(true)
+    ->sslProtocol("TLS")              // 国密请使用 "TLCP"
+    ->trustStore("/path/to/ca.p12")
+    ->trustStorePwd("thrift")
+    ->keyStore("/path/to/client.p12") // 可选，双向认证
+    ->keyStorePwd("thrift")
+    ->build();
+```
+
+请使用 PKCS12 证书库（JKS 可用 `keytool -importkeystore` 转换）。详见
+[README.md](../README.md#client-ssl--tlcp-configuration)。
+
 ## 开发说明
 
 - **Windows**：应用与 SDK 均使用 **`/MD`**，与 Visual Studio 默认工程一致；

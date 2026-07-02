@@ -42,12 +42,18 @@ set(_test_targets
         session_tests
         session_relational_tests
         session_c_tests
-        session_c_relational_tests)
+        session_c_relational_tests
+        rpc_ssl_utils_tests)
 
 add_executable(session_tests              main.cpp              cpp/sessionIT.cpp)
 add_executable(session_relational_tests   main_Relational.cpp   cpp/sessionRelationalIT.cpp)
 add_executable(session_c_tests            main_c.cpp            cpp/sessionCIT.cpp)
 add_executable(session_c_relational_tests main_c_Relational.cpp cpp/sessionCRelationalIT.cpp)
+add_executable(rpc_ssl_utils_tests
+        main_rpc_ssl.cpp
+        cpp/RpcSslUtilsTest.cpp
+        cpp/RpcSslMutualAuthTest.cpp
+        cpp/SslTestFixtures.cpp)
 
 foreach(_t IN LISTS _test_targets)
     target_include_directories(${_t} PRIVATE
@@ -63,6 +69,31 @@ foreach(_t IN LISTS _test_targets)
         target_link_libraries(${_t} PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     endif()
 endforeach()
+
+if(WITH_SSL)
+    if(WIN32)
+        set(_iotdb_openssl_executable "${OPENSSL_ROOT_DIR}/bin/openssl.exe")
+    else()
+        set(_iotdb_openssl_executable "${OPENSSL_ROOT_DIR}/bin/openssl")
+    endif()
+    file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/fixtures" _iotdb_test_fixtures_dir)
+    file(TO_CMAKE_PATH "${_iotdb_openssl_executable}" _iotdb_openssl_executable_cmake)
+    string(REPLACE "\\" "/" _iotdb_test_fixtures_dir_fwd "${_iotdb_test_fixtures_dir}")
+    string(REPLACE "\\" "/" _iotdb_openssl_executable_fwd "${_iotdb_openssl_executable_cmake}")
+    target_compile_definitions(rpc_ssl_utils_tests PRIVATE
+            IOTDB_TEST_FIXTURES_DIR="${_iotdb_test_fixtures_dir_fwd}"
+            IOTDB_OPENSSL_EXECUTABLE="${_iotdb_openssl_executable_fwd}")
+    add_custom_command(TARGET rpc_ssl_utils_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
+                    "$<TARGET_FILE_DIR:rpc_ssl_utils_tests>/fixtures"
+            COMMENT "Copy SSL test fixtures next to rpc_ssl_utils_tests")
+    if(WIN32)
+        target_link_libraries(rpc_ssl_utils_tests PRIVATE ws2_32 "${THRIFT_STATIC_LIB_PATH}")
+    else()
+        target_link_libraries(rpc_ssl_utils_tests PRIVATE iotdb_thrift_static)
+    endif()
+endif()
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
     foreach(_t IN LISTS _test_targets)
@@ -86,19 +117,30 @@ if(MSVC)
     add_test(NAME sessionRelationalIT    CONFIGURATIONS Release COMMAND session_relational_tests)
     add_test(NAME sessionCIT             CONFIGURATIONS Release COMMAND session_c_tests)
     add_test(NAME sessionCRelationalIT   CONFIGURATIONS Release COMMAND session_c_relational_tests)
+    add_test(NAME rpcSslUtilsTest      CONFIGURATIONS Release COMMAND rpc_ssl_utils_tests)
     foreach(_t IN LISTS _test_targets)
         add_custom_command(TARGET ${_t} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                         $<TARGET_FILE:iotdb_session> $<TARGET_FILE_DIR:${_t}>)
+        if(WITH_SSL)
+            _iotdb_collect_openssl_windows_dlls(_iotdb_ssl_runtime_dlls)
+            foreach(_ssl_dll IN LISTS _iotdb_ssl_runtime_dlls)
+                add_custom_command(TARGET ${_t} POST_BUILD
+                        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                                "${_ssl_dll}" $<TARGET_FILE_DIR:${_t}>
+                        COMMENT "Copy bundled SSL runtime next to ${_t}")
+            endforeach()
+        endif()
     endforeach()
 else()
     add_test(NAME sessionIT              COMMAND session_tests)
     add_test(NAME sessionRelationalIT    COMMAND session_relational_tests)
     add_test(NAME sessionCIT             COMMAND session_c_tests)
     add_test(NAME sessionCRelationalIT   COMMAND session_c_relational_tests)
+    add_test(NAME rpcSslUtilsTest      COMMAND rpc_ssl_utils_tests)
 endif()
 
 # Run sequentially: parallel ctest overloads the single local IoTDB instance.
 set_tests_properties(
-        sessionIT sessionRelationalIT sessionCIT sessionCRelationalIT
+        sessionIT sessionRelationalIT sessionCIT sessionCRelationalIT rpcSslUtilsTest
         PROPERTIES RUN_SERIAL TRUE)

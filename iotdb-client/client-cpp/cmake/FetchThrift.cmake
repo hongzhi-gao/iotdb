@@ -111,6 +111,8 @@ if(NOT EXISTS "${_thrift_src}/CMakeLists.txt")
             "extracting ${_thrift_tarball}.")
 endif()
 
+include("${CMAKE_CURRENT_LIST_DIR}/PatchThriftSsl.cmake")
+
 # ---------------------------------------------------------------------------
 # ExternalProject_Add: build thrift at *configure* time so the produced
 # binary / library can immediately drive code generation and linking.
@@ -185,7 +187,7 @@ if(WITH_SSL)
 else()
     set(_thrift_ssl_stamp "-nossl")
 endif()
-set(_thrift_stamp "${_thrift_build}/.built-${THRIFT_GIT_COMMIT}-${_thrift_build_config}-mdll${_thrift_abi_stamp}${_thrift_ssl_stamp}")
+set(_thrift_stamp "${_thrift_build}/.built-${THRIFT_GIT_COMMIT}-${_thrift_build_config}-mdll${_thrift_abi_stamp}${_thrift_ssl_stamp}-sslctx")
 if(NOT EXISTS "${_thrift_stamp}")
     file(MAKE_DIRECTORY "${_thrift_build}")
     message(STATUS "[Thrift] configuring ${_thrift_dirname}")
