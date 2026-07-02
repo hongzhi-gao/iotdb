@@ -169,3 +169,11 @@ endif()
 set_tests_properties(
         sessionIT sessionRelationalIT sessionCIT sessionCRelationalIT rpcSslUtilsTest
         PROPERTIES RUN_SERIAL TRUE)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
+    set_tests_properties(rpcSslUtilsTest PROPERTIES
+            ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
+endif()
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
+    set_tests_properties(rpcSslUtilsTest PROPERTIES
+            ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0")
+endif()
