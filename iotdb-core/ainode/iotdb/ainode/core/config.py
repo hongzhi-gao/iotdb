@@ -30,6 +30,13 @@ from iotdb.ainode.core.constant import (
     AINODE_CONF_GIT_FILE_NAME,
     AINODE_CONF_POM_FILE_NAME,
     AINODE_INFERENCE_BATCH_INTERVAL_IN_MS,
+    AINODE_INFERENCE_BATCH_WAITING_WINDOW_IN_MS,
+    AINODE_INFERENCE_BATCH_DEADLINE_IN_MS,
+    AINODE_INFERENCE_MAX_BATCH_SIZE,
+    AINODE_INFERENCE_MAX_BATCH_POINTS,
+    AINODE_INFERENCE_INPUT_LENGTH_BUCKET_SIZE,
+    AINODE_INFERENCE_OUTPUT_LENGTH_BUCKET_SIZE,
+    AINODE_INFERENCE_STATS_LOG_INTERVAL_IN_SEC,
     AINODE_INFERENCE_EXTRA_MEMORY_RATIO,
     AINODE_INFERENCE_MAX_OUTPUT_LENGTH,
     AINODE_INFERENCE_MEMORY_USAGE_RATIO,
@@ -72,6 +79,23 @@ class AINodeConfig(object):
         # Inference configuration
         self._ain_inference_batch_interval_in_ms: int = (
             AINODE_INFERENCE_BATCH_INTERVAL_IN_MS
+        )
+        self._ain_inference_batch_waiting_window_in_ms: int = (
+            AINODE_INFERENCE_BATCH_WAITING_WINDOW_IN_MS
+        )
+        self._ain_inference_batch_deadline_in_ms: int = (
+            AINODE_INFERENCE_BATCH_DEADLINE_IN_MS
+        )
+        self._ain_inference_max_batch_size: int = AINODE_INFERENCE_MAX_BATCH_SIZE
+        self._ain_inference_max_batch_points: int = AINODE_INFERENCE_MAX_BATCH_POINTS
+        self._ain_inference_input_length_bucket_size: int = (
+            AINODE_INFERENCE_INPUT_LENGTH_BUCKET_SIZE
+        )
+        self._ain_inference_output_length_bucket_size: int = (
+            AINODE_INFERENCE_OUTPUT_LENGTH_BUCKET_SIZE
+        )
+        self._ain_inference_stats_log_interval_in_sec: int = (
+            AINODE_INFERENCE_STATS_LOG_INTERVAL_IN_SEC
         )
         self._ain_inference_max_output_length: int = AINODE_INFERENCE_MAX_OUTPUT_LENGTH
         self._ain_inference_model_mem_usage_map: dict[str, int] = (
@@ -155,6 +179,70 @@ class AINodeConfig(object):
         self, ain_inference_batch_interval_in_ms: int
     ) -> None:
         self._ain_inference_batch_interval_in_ms = ain_inference_batch_interval_in_ms
+
+    def get_ain_inference_batch_waiting_window_in_ms(self) -> int:
+        return self._ain_inference_batch_waiting_window_in_ms
+
+    def set_ain_inference_batch_waiting_window_in_ms(
+        self, ain_inference_batch_waiting_window_in_ms: int
+    ) -> None:
+        self._ain_inference_batch_waiting_window_in_ms = (
+            ain_inference_batch_waiting_window_in_ms
+        )
+
+    def get_ain_inference_batch_deadline_in_ms(self) -> int:
+        return self._ain_inference_batch_deadline_in_ms
+
+    def set_ain_inference_batch_deadline_in_ms(
+        self, ain_inference_batch_deadline_in_ms: int
+    ) -> None:
+        self._ain_inference_batch_deadline_in_ms = ain_inference_batch_deadline_in_ms
+
+    def get_ain_inference_max_batch_size(self) -> int:
+        return self._ain_inference_max_batch_size
+
+    def set_ain_inference_max_batch_size(
+        self, ain_inference_max_batch_size: int
+    ) -> None:
+        self._ain_inference_max_batch_size = ain_inference_max_batch_size
+
+    def get_ain_inference_max_batch_points(self) -> int:
+        return self._ain_inference_max_batch_points
+
+    def set_ain_inference_max_batch_points(
+        self, ain_inference_max_batch_points: int
+    ) -> None:
+        self._ain_inference_max_batch_points = ain_inference_max_batch_points
+
+    def get_ain_inference_input_length_bucket_size(self) -> int:
+        return self._ain_inference_input_length_bucket_size
+
+    def set_ain_inference_input_length_bucket_size(
+        self, ain_inference_input_length_bucket_size: int
+    ) -> None:
+        self._ain_inference_input_length_bucket_size = (
+            ain_inference_input_length_bucket_size
+        )
+
+    def get_ain_inference_output_length_bucket_size(self) -> int:
+        return self._ain_inference_output_length_bucket_size
+
+    def set_ain_inference_output_length_bucket_size(
+        self, ain_inference_output_length_bucket_size: int
+    ) -> None:
+        self._ain_inference_output_length_bucket_size = (
+            ain_inference_output_length_bucket_size
+        )
+
+    def get_ain_inference_stats_log_interval_in_sec(self) -> int:
+        return self._ain_inference_stats_log_interval_in_sec
+
+    def set_ain_inference_stats_log_interval_in_sec(
+        self, ain_inference_stats_log_interval_in_sec: int
+    ) -> None:
+        self._ain_inference_stats_log_interval_in_sec = (
+            ain_inference_stats_log_interval_in_sec
+        )
 
     def get_ain_inference_max_output_length(self) -> int:
         return self._ain_inference_max_output_length
@@ -342,6 +430,41 @@ class AINodeDescriptor(object):
             if "ain_inference_batch_interval_in_ms" in config_keys:
                 self._config.set_ain_inference_batch_interval_in_ms(
                     int(file_configs["ain_inference_batch_interval_in_ms"])
+                )
+
+            if "ain_inference_batch_waiting_window_in_ms" in config_keys:
+                self._config.set_ain_inference_batch_waiting_window_in_ms(
+                    int(file_configs["ain_inference_batch_waiting_window_in_ms"])
+                )
+
+            if "ain_inference_batch_deadline_in_ms" in config_keys:
+                self._config.set_ain_inference_batch_deadline_in_ms(
+                    int(file_configs["ain_inference_batch_deadline_in_ms"])
+                )
+
+            if "ain_inference_max_batch_size" in config_keys:
+                self._config.set_ain_inference_max_batch_size(
+                    int(file_configs["ain_inference_max_batch_size"])
+                )
+
+            if "ain_inference_max_batch_points" in config_keys:
+                self._config.set_ain_inference_max_batch_points(
+                    int(file_configs["ain_inference_max_batch_points"])
+                )
+
+            if "ain_inference_input_length_bucket_size" in config_keys:
+                self._config.set_ain_inference_input_length_bucket_size(
+                    int(file_configs["ain_inference_input_length_bucket_size"])
+                )
+
+            if "ain_inference_output_length_bucket_size" in config_keys:
+                self._config.set_ain_inference_output_length_bucket_size(
+                    int(file_configs["ain_inference_output_length_bucket_size"])
+                )
+
+            if "ain_inference_stats_log_interval_in_sec" in config_keys:
+                self._config.set_ain_inference_stats_log_interval_in_sec(
+                    int(file_configs["ain_inference_stats_log_interval_in_sec"])
                 )
 
             if "ain_inference_model_mem_usage_map" in config_keys:

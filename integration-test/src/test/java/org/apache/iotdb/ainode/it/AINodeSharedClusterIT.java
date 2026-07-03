@@ -109,7 +109,8 @@ public class AINodeSharedClusterIT {
   private static final List<FakeModelInfo> CONCURRENT_FORECAST_MODELS =
       Arrays.asList(
           new FakeModelInfo("sundial", "sundial", "builtin", "active"),
-          new FakeModelInfo("timer_xl", "timer", "builtin", "active"));
+          new FakeModelInfo("timer_xl", "timer", "builtin", "active"),
+          new FakeModelInfo("chronos2", "t5", "builtin", "active"));
   private static final String CONCURRENT_FORECAST_SQL_TEMPLATE =
       "SELECT * FROM FORECAST(model_id=>'%s', targets=>(SELECT time,s FROM concurrent_db.AI) ORDER BY time, output_length=>%d)";
 

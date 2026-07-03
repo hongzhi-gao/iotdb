@@ -29,7 +29,10 @@ logger = Logger()
 
 class BasicRequestScheduler(AbstractRequestScheduler):
     """
-    A simple FIFO request scheduler that selects requests based on memory availability and activation/step size.
+    Legacy FIFO request scheduler with fixed activation/step sizes.
+
+    Production pools use :class:`DynamicRequestScheduler` for deadline-aware
+    batching and length-bucket grouping.
     """
 
     def __init__(

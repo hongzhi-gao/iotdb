@@ -17,7 +17,8 @@
 #
 
 import threading
-from typing import Any
+import time
+from typing import Any, Optional
 
 import torch
 
@@ -59,6 +60,11 @@ class InferenceRequest:
         self.assigned_pool_id = -1  # The pool handling this request
         self.assigned_device_id = -1  # The device handling this request
 
+        now = time.time()
+        self.enqueue_time: float = now
+        self.activate_time: Optional[float] = None
+        self.finish_time: Optional[float] = None
+
         # Preallocate output buffer [batch_size, target_count, output_length]
         self.output_tensor = torch.zeros(
             self.batch_size, self.target_count, output_length, device="cpu"
@@ -66,15 +72,32 @@ class InferenceRequest:
 
     def mark_running(self):
         self.state = InferenceRequestState.RUNNING
+        if self.activate_time is None:
+            self.activate_time = time.time()
 
     def mark_finished(self):
         self.state = InferenceRequestState.FINISHED
+        if self.finish_time is None:
+            self.finish_time = time.time()
 
     def is_finished(self) -> bool:
         return (
             self.state == InferenceRequestState.FINISHED
             or self.cur_step_idx >= self.output_length
         )
+
+    def remaining_output_length(self) -> int:
+        return max(0, self.output_length - self.cur_step_idx)
+
+    def waited_ms(self, now: Optional[float] = None) -> float:
+        reference = now if now is not None else time.time()
+        return max(0.0, (reference - self.enqueue_time) * 1000)
+
+    def is_past_deadline(self, deadline_ms: float, now: Optional[float] = None) -> bool:
+        return self.waited_ms(now) >= deadline_ms
+
+    def batch_points(self) -> int:
+        return self.batch_size * self.target_count * self.input_length
 
     def write_step_output(self, step_output: torch.Tensor):
         while step_output.ndim < 3:

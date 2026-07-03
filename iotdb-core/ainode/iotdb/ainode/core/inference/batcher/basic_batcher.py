@@ -26,7 +26,10 @@ from iotdb.ainode.core.inference.inference_request import InferenceRequest
 
 class BasicBatcher(AbstractBatcher):
     """
-    Basic batcher for inference requests.
+    Legacy exact-shape batcher.
+
+    Prefer :class:`DynamicBatcher` for production pools; this class remains for
+    callers that require identical ``input_length`` across all requests.
     """
 
     def __init__(self):
