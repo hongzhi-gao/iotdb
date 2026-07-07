@@ -78,7 +78,7 @@ if(NOT MSVC)
     file(WRITE "${_iotdb_cxx11_abi_stamp}" "${_iotdb_cxx11_abi_stamp_value}")
 endif()
 
-option(WITH_SSL "Build with OpenSSL support" ON)
+option(WITH_SSL "Build with Tongsuo SSL/TLS support" ON)
 option(BUILD_TESTING "Build IT test executables" OFF)
 option(IOTDB_OFFLINE "Disable all network access during configure" OFF)
 set(IOTDB_SESSION_VERSION "0.0.0"
@@ -97,8 +97,12 @@ else()
 endif()
 set(BOOST_VERSION "${_iotdb_default_boost_version}"
     CACHE STRING "Boost version used when downloading / unpacking (Thrift build only)")
-set(THRIFT_VERSION "0.23.0"
-    CACHE STRING "Apache Thrift version used when downloading / building")
+set(THRIFT_GIT_COMMIT "6dfb0b26ea6b9ab9c114e0ef4c0f6e7b8110b242"
+    CACHE STRING "Apache Thrift git commit used when downloading / building")
+set(TONGSUO_GIT_REF "8.4.0"
+    CACHE STRING "Tongsuo git tag/commit used when building SSL/TLS from source")
+set(TONGSUO_TARBALL_SHA256 "57c2741750a699bfbdaa1bbe44a5733e9c8fc65d086c210151cfbc2bbd6fc975"
+    CACHE STRING "Expected SHA256 of the Tongsuo source tarball")
 
 if(WIN32)
     set(IOTDB_OS_DEPS_DIR "${IOTDB_DEPS_DIR}/windows")
@@ -145,8 +149,8 @@ if(UNIX AND NOT APPLE)
             SOVERSION "${IOTDB_SESSION_SOVERSION}")
 endif()
 
-# When SSL is on we bundle the OpenSSL shared libraries next to libiotdb_session
-# in the package lib/ directory. Give the library an $ORIGIN-relative runtime
+# When SSL is on we bundle the Tongsuo/OpenSSL-compatible shared libraries next to
+# libiotdb_session in the package lib/ directory. Give the library an $ORIGIN-relative runtime
 # search path so the loader finds them without LD_LIBRARY_PATH / install_name
 # tweaks, keeping the SDK self-contained.
 if(WITH_SSL)
@@ -194,7 +198,15 @@ else()
 endif()
 
 if(WITH_SSL)
-    target_link_libraries(iotdb_session PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+    target_link_libraries(iotdb_session PUBLIC
+            OpenSSL::SSL OpenSSL::Crypto)
+    if(TARGET iotdb_tongsuo_openssl_wrap)
+        target_link_libraries(iotdb_session PUBLIC iotdb_tongsuo_openssl_wrap)
+        # BEFORE on a linked INTERFACE target does not always win over Homebrew's
+        # default -isystem paths on macOS; apply the wrap directory directly.
+        target_include_directories(iotdb_session BEFORE PUBLIC
+                "${IOTDB_TONGSUO_OPENSSL_WRAP_DIR}")
+    endif()
     target_compile_definitions(iotdb_session PUBLIC WITH_SSL=1)
 else()
     target_compile_definitions(iotdb_session PUBLIC WITH_SSL=0)
@@ -240,8 +252,8 @@ install(TARGETS iotdb_session
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)
 
-# Ship the OpenSSL shared libraries we link against next to iotdb_session so the
-# packaged SDK is self-contained on machines without a system OpenSSL.
+# Ship the Tongsuo shared libraries we link against next to iotdb_session so the
+# packaged SDK is self-contained on machines without a system SSL library.
 if(WITH_SSL)
     iotdb_install_openssl_runtime()
 endif()
@@ -307,7 +319,6 @@ install(FILES
         "${CMAKE_BINARY_DIR}/package-metadata/VERSION"
         "${CMAKE_BINARY_DIR}/package-metadata/BUILD-INFO.txt"
         DESTINATION .)
-
 if(BUILD_TESTING)
     enable_testing()
     add_subdirectory(test)

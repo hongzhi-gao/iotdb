@@ -44,6 +44,31 @@ public:
     return this;
   }
 
+  SessionBuilder* sslProtocol(const std::string& sslProtocol) {
+    AbstractSessionBuilder::sslProtocol = sslProtocol;
+    return this;
+  }
+
+  SessionBuilder* trustStore(const std::string& trustStore) {
+    AbstractSessionBuilder::trustStore = trustStore;
+    return this;
+  }
+
+  SessionBuilder* trustStorePwd(const std::string& trustStorePwd) {
+    AbstractSessionBuilder::trustStorePwd = trustStorePwd;
+    return this;
+  }
+
+  SessionBuilder* keyStore(const std::string& keyStore) {
+    AbstractSessionBuilder::keyStore = keyStore;
+    return this;
+  }
+
+  SessionBuilder* keyStorePwd(const std::string& keyStorePwd) {
+    AbstractSessionBuilder::keyStorePwd = keyStorePwd;
+    return this;
+  }
+
   SessionBuilder* username(const std::string& username) {
     AbstractSessionBuilder::username = username;
     return this;

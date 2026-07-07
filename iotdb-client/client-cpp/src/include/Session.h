@@ -19,6 +19,8 @@
 #ifndef IOTDB_SESSION_H
 #define IOTDB_SESSION_H
 
+struct SslConfig;
+
 #include <memory>
 #include <string>
 #include <utility>
@@ -600,6 +602,7 @@ public:
 
   void setSqlDialect(const std::string& dialect);
   void setDatabase(const std::string& database);
+  void setSslConfig(const SslConfig& sslConfig);
   std::string getDatabase();
   void changeDatabase(const std::string& database);
 

@@ -266,7 +266,7 @@ if(BISON_EXECUTABLE)
     if(_bison_ver AND _bison_ver VERSION_LESS _bison_min_version)
         message(STATUS
                 "[BuildTools] system bison ${_bison_ver} < ${_bison_min_version} "
-                "(too old for Thrift ${THRIFT_VERSION}); building ${BISON_VERSION} from source")
+                "(too old for Thrift ${THRIFT_GIT_COMMIT}); building ${BISON_VERSION} from source")
         unset(BISON_EXECUTABLE CACHE)
     endif()
 endif()

@@ -24,6 +24,8 @@
 
 #include "Session.h"
 
+struct SslConfig;
+
 class TableSession {
 private:
   std::shared_ptr<Session> session_;
@@ -41,6 +43,7 @@ public:
   unique_ptr<SessionDataSet> executeQueryStatement(const std::string& sql, int64_t timeoutInMs);
   void open(bool enableRPCCompression = false);
   void close();
+  void setSslConfig(const SslConfig& sslConfig);
 };
 
 #endif // IOTDB_TABLESESSION_H
