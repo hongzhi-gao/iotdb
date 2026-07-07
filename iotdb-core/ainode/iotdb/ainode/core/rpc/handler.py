@@ -70,9 +70,16 @@ class AINodeRPCServiceHandler(IAINodeRPCService.Iface):
         return ClusterManager.get_heart_beat(req)
 
     def showAIDevices(self) -> TShowAIDevicesResp:
-        device_id_map = {"cpu": "cpu"}
-        for device_id in self._backend.device_ids():
-            device_id_map[str(device_id)] = self._backend.type.value
+        device_id_map = {}
+        if self._backend.type.value == "cuda":
+            import torch
+
+            for device_id in range(torch.cuda.device_count()):
+                device_id_map[str(device_id)] = "cuda"
+        else:
+            for device_id in self._backend.device_ids():
+                device_id_map[str(device_id)] = self._backend.type.value
+        device_id_map["cpu"] = "cpu"
         return TShowAIDevicesResp(
             status=TSStatus(code=TSStatusCode.SUCCESS_STATUS.value),
             deviceIdMap=device_id_map,

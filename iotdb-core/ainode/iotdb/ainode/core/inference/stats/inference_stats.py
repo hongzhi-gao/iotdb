@@ -21,6 +21,7 @@ import time
 from typing import Iterable, List, Optional
 
 from iotdb.ainode.core.config import AINodeDescriptor
+from iotdb.ainode.core.inference.batcher.batch_result import BatchResult
 from iotdb.ainode.core.inference.inference_request import InferenceRequest
 from iotdb.ainode.core.log import Logger
 
@@ -37,7 +38,8 @@ def _percentile(values: List[float], pct: float) -> float:
 
 class InferenceStatsCollector:
     """
-    Collects inference latency, QPS, and batch-size distribution for a pool.
+    Collects inference latency, QPS, batch-size distribution, and batching
+    signals for a pool.
     """
 
     def __init__(
@@ -59,14 +61,32 @@ class InferenceStatsCollector:
         self._lock = threading.Lock()
         self._latencies_ms: List[float] = []
         self._batch_sizes: List[int] = []
+        self._padding_waste_ratios: List[float] = []
+        self._queue_depths: List[int] = []
+        self._deadline_forced_batches = 0
         self._completed_requests = 0
         self._window_start = time.time()
         self._last_log_time = self._window_start
 
-    def record_batch(self, requests: Iterable[InferenceRequest], batch_size: int):
+    def record_deadline_forced_batches(self, count: int):
+        if count <= 0:
+            return
+        with self._lock:
+            self._deadline_forced_batches += count
+
+    def record_batch(
+        self,
+        requests: Iterable[InferenceRequest],
+        batch_size: int,
+        batch_result: Optional[BatchResult] = None,
+        queue_depth: int = 0,
+    ):
         finished_at = time.time()
         with self._lock:
             self._batch_sizes.append(batch_size)
+            self._queue_depths.append(queue_depth)
+            if batch_result is not None:
+                self._padding_waste_ratios.append(batch_result.padding_waste_ratio())
             for req in requests:
                 if req.finish_time is None:
                     req.finish_time = finished_at
@@ -81,17 +101,33 @@ class InferenceStatsCollector:
         self._emit_summary_locked(now)
         self._latencies_ms.clear()
         self._batch_sizes.clear()
+        self._padding_waste_ratios.clear()
+        self._queue_depths.clear()
+        self._deadline_forced_batches = 0
         self._window_start = now
         self._last_log_time = now
 
     def _emit_summary_locked(self, now: float):
         elapsed = max(now - self._window_start, 1e-6)
         qps = self._completed_requests / elapsed
+        avg_padding_waste = (
+            sum(self._padding_waste_ratios) / len(self._padding_waste_ratios)
+            if self._padding_waste_ratios
+            else None
+        )
+        avg_queue_depth = (
+            sum(self._queue_depths) / len(self._queue_depths)
+            if self._queue_depths
+            else None
+        )
         if not self._latencies_ms:
             logger.info(
                 f"[InferenceStats][{self.device}][Pool-{self.pool_id}][Model-{self.model_id}] "
                 f"qps={qps:.2f}, completed={self._completed_requests}, "
-                f"latency_p50/p95/p99=NA, batch_size_avg=NA"
+                f"latency_p50/p95/p99=NA, batch_size_avg=NA, "
+                f"padding_waste_avg={self._fmt_optional(avg_padding_waste)}, "
+                f"queue_depth_avg={self._fmt_optional(avg_queue_depth)}, "
+                f"deadline_forced_batches={self._deadline_forced_batches}"
             )
             self._completed_requests = 0
             return
@@ -103,6 +139,15 @@ class InferenceStatsCollector:
             f"latency_p50={_percentile(self._latencies_ms, 50):.2f}ms, "
             f"latency_p95={_percentile(self._latencies_ms, 95):.2f}ms, "
             f"latency_p99={_percentile(self._latencies_ms, 99):.2f}ms, "
-            f"batch_size_avg={avg_batch_size:.2f}, batch_count={len(self._batch_sizes)}"
+            f"batch_size_avg={avg_batch_size:.2f}, batch_count={len(self._batch_sizes)}, "
+            f"padding_waste_avg={self._fmt_optional(avg_padding_waste)}, "
+            f"queue_depth_avg={self._fmt_optional(avg_queue_depth)}, "
+            f"deadline_forced_batches={self._deadline_forced_batches}"
         )
         self._completed_requests = 0
+
+    @staticmethod
+    def _fmt_optional(value: Optional[float]) -> str:
+        if value is None:
+            return "NA"
+        return f"{value:.4f}"

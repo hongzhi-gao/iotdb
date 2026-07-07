@@ -63,6 +63,75 @@ public class AINodeWrapper extends AbstractNodeWrapper {
   public static final String SCRIPT_PATH = "sbin";
   public static final String BUILT_IN_MODEL_PATH = "data/ainode/models/builtin";
   public static final String CACHE_BUILT_IN_MODEL_PATH = "/data/ainode/models";
+  private static final String MODEL_CACHE_PROPERTY = "iotdb.it.ainode.model.cache";
+
+  private static Path resolveBuiltInModelCacheRoot() {
+    String configuredCache = System.getProperty(MODEL_CACHE_PROPERTY);
+    if (configuredCache != null && !configuredCache.isBlank()) {
+      return Paths.get(configuredCache);
+    }
+    Path defaultCache = Paths.get(CACHE_BUILT_IN_MODEL_PATH);
+    if (Files.exists(defaultCache)) {
+      return defaultCache;
+    }
+    return Paths.get(System.getProperty("user.home"), ".cache", "iotdb-ainode-models");
+  }
+
+  private void linkOrCopyBuiltInModels(String builtInModelPath) throws IOException {
+    File builtInModelDir = new File(builtInModelPath);
+    try {
+      if (builtInModelDir.exists()) {
+        PathUtils.deleteDirectory(builtInModelDir.toPath());
+      }
+    } catch (NoSuchFileException e) {
+      // ignored
+    }
+
+    Path cacheRoot = resolveBuiltInModelCacheRoot();
+    Path destRoot = builtInModelDir.toPath();
+    builtInModelDir.getParentFile().mkdirs();
+
+    if (!Files.exists(cacheRoot)) {
+      logger.warn(
+          "AINode built-in model cache {} does not exist; models will be downloaded on demand",
+          cacheRoot);
+      builtInModelDir.mkdirs();
+      return;
+    }
+
+    try {
+      Files.createSymbolicLink(destRoot, cacheRoot);
+      logger.info("AINode symlinked model weights {} -> {}", destRoot, cacheRoot);
+    } catch (UnsupportedOperationException | IOException symlinkErr) {
+      logger.warn(
+          "AINode failed to symlink {} -> {} ({}), falling back to copy",
+          destRoot,
+          cacheRoot,
+          symlinkErr.toString());
+      builtInModelDir.mkdirs();
+      try (Stream<Path> s = Files.walk(cacheRoot)) {
+        s.forEach(
+            source -> {
+              Path destination =
+                  Paths.get(
+                      builtInModelPath, source.toString().substring(cacheRoot.toString().length()));
+              logger.info("AINode copying model weights from {} to {}", source, destination);
+              try {
+                Files.copy(
+                    source,
+                    destination,
+                    LinkOption.NOFOLLOW_LINKS,
+                    StandardCopyOption.COPY_ATTRIBUTES);
+              } catch (IOException e) {
+                logger.error("AINode got error copying model weights", e);
+                throw new RuntimeException(e);
+              }
+            });
+      } catch (Exception e) {
+        logger.error("AINode got error copying model weights", e);
+      }
+    }
+  }
 
   private void replaceAttribute(String[] keys, String[] values, String filePath) {
     Properties props = new Properties();
@@ -134,51 +203,7 @@ public class AINodeWrapper extends AbstractNodeWrapper {
       // Link built-in LTSM weights from the runner-wide cache. These can be hundreds of MB to
       // multiple GB; copying them per fork dominates IT startup. Symlinks share read-only weights
       // across forks; we fall back to a copy on platforms / filesystems that reject symlinks.
-      String builtInModelPath = filePrefix + File.separator + BUILT_IN_MODEL_PATH;
-      File builtInModelDir = new File(builtInModelPath);
-      try {
-        if (builtInModelDir.exists()) {
-          PathUtils.deleteDirectory(builtInModelDir.toPath());
-        }
-      } catch (NoSuchFileException e) {
-        // ignored
-      }
-      Path cacheRoot = Paths.get(CACHE_BUILT_IN_MODEL_PATH);
-      Path destRoot = builtInModelDir.toPath();
-      builtInModelDir.getParentFile().mkdirs();
-      try {
-        Files.createSymbolicLink(destRoot, cacheRoot);
-        logger.info("AINode symlinked model weights {} -> {}", destRoot, cacheRoot);
-      } catch (UnsupportedOperationException | IOException symlinkErr) {
-        logger.warn(
-            "AINode failed to symlink {} -> {} ({}), falling back to copy",
-            destRoot,
-            cacheRoot,
-            symlinkErr.toString());
-        builtInModelDir.mkdirs();
-        try (Stream<Path> s = Files.walk(cacheRoot)) {
-          s.forEach(
-              source -> {
-                Path destination =
-                    Paths.get(
-                        builtInModelPath,
-                        source.toString().substring(CACHE_BUILT_IN_MODEL_PATH.length()));
-                logger.info("AINode copying model weights from {} to {}", source, destination);
-                try {
-                  Files.copy(
-                      source,
-                      destination,
-                      LinkOption.NOFOLLOW_LINKS,
-                      StandardCopyOption.COPY_ATTRIBUTES);
-                } catch (IOException e) {
-                  logger.error("AINode got error copying model weights", e);
-                  throw new RuntimeException(e);
-                }
-              });
-        } catch (Exception e) {
-          logger.error("AINode got error copying model weights", e);
-        }
-      }
+      linkOrCopyBuiltInModels(filePrefix + File.separator + BUILT_IN_MODEL_PATH);
 
       // start AINode
       List<String> startCommand = new ArrayList<>();

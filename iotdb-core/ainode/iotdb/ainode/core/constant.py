@@ -46,6 +46,26 @@ DEFAULT_RECONNECT_TIMEOUT = 20
 DEFAULT_RECONNECT_TIMES = 3
 
 # AINode inference configuration
+AINODE_INFERENCE_SCHEDULING_PROFILE = "balanced"
+AINODE_INFERENCE_SCHEDULING_PROFILES = {
+    "latency": {
+        "batch_interval_ms": 5,
+        "batch_waiting_window_ms": 5,
+        "batch_deadline_ms": 200,
+    },
+    "balanced": {
+        "batch_interval_ms": 15,
+        "batch_waiting_window_ms": 15,
+        "batch_deadline_ms": 500,
+    },
+    "throughput": {
+        "batch_interval_ms": 30,
+        "batch_waiting_window_ms": 40,
+        "batch_deadline_ms": 1500,
+    },
+}
+
+# Legacy defaults kept for deprecated direct overrides and tests.
 AINODE_INFERENCE_BATCH_INTERVAL_IN_MS = 15
 AINODE_INFERENCE_BATCH_WAITING_WINDOW_IN_MS = 15
 AINODE_INFERENCE_BATCH_DEADLINE_IN_MS = 500
@@ -55,6 +75,10 @@ AINODE_INFERENCE_INPUT_LENGTH_BUCKET_SIZE = 32
 AINODE_INFERENCE_OUTPUT_LENGTH_BUCKET_SIZE = 16
 AINODE_INFERENCE_STATS_LOG_INTERVAL_IN_SEC = 60
 AINODE_INFERENCE_MAX_OUTPUT_LENGTH = 2880
+AINODE_INFERENCE_MAX_MEMORY_BYTES = 1 << 30
+AINODE_INFERENCE_MAX_ACTIVATE_SIZE = 64
+AINODE_INFERENCE_MAX_STEP_SIZE = 64
+AINODE_INFERENCE_MAX_QUEUE_SIZE = None
 
 # TODO: Should be optimized
 AINODE_INFERENCE_MODEL_MEM_USAGE_MAP = {
@@ -63,7 +87,8 @@ AINODE_INFERENCE_MODEL_MEM_USAGE_MAP = {
     "chronos2": 1200 * 1024**2,  # 1200 MiB
 }  # the memory usage of each model in bytes
 
-AINODE_INFERENCE_MEMORY_USAGE_RATIO = 0.2  # the device space allocated for inference
+# None means auto-detect at startup by device memory tier.
+AINODE_INFERENCE_MEMORY_USAGE_RATIO = None
 AINODE_INFERENCE_EXTRA_MEMORY_RATIO = (
     1.2  # the overhead ratio for inference, used to estimate the pool size
 )
@@ -101,6 +126,7 @@ class TSStatusCode(Enum):
     INVALID_URI_ERROR = 1511
     INVALID_INFERENCE_CONFIG = 1512
     INFERENCE_INTERNAL_ERROR = 1520
+    INFERENCE_OVERLOAD_ERROR = 1521
 
     AINODE_INTERNAL_ERROR = 1599  # In case somebody too lazy to add a new error code
 

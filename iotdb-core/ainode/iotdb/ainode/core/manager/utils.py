@@ -29,15 +29,14 @@ from iotdb.ainode.core.model.model_loader import load_model
 
 logger = Logger()
 
-MODEL_MEM_USAGE_MAP = (
-    AINodeDescriptor().get_config().get_ain_inference_model_mem_usage_map()
-)  # the memory usage of each model in bytes
-INFERENCE_MEMORY_USAGE_RATIO = (
-    AINodeDescriptor().get_config().get_ain_inference_memory_usage_ratio()
-)  # the device space allocated for inference
-INFERENCE_EXTRA_MEMORY_RATIO = (
-    AINodeDescriptor().get_config().get_ain_inference_extra_memory_ratio()
-)  # the overhead ratio for inference, used to estimate the pool size
+
+def _inference_settings():
+    config = AINodeDescriptor().get_config()
+    return (
+        config.get_ain_inference_model_mem_usage_map(),
+        config.get_ain_inference_memory_usage_ratio(),
+        config.get_ain_inference_extra_memory_ratio(),
+    )
 
 
 def evaluate_system_resources(device: torch.device) -> dict:
@@ -57,8 +56,11 @@ def evaluate_system_resources(device: torch.device) -> dict:
 
 
 def estimate_pool_size(device: torch.device, model_id: str) -> int:
+    model_mem_usage_map, inference_memory_usage_ratio, inference_extra_memory_ratio = (
+        _inference_settings()
+    )
     model_info = ModelManager().get_model_info(model_id)
-    if model_info is None or model_info.model_type not in MODEL_MEM_USAGE_MAP:
+    if model_info is None or model_id not in model_mem_usage_map:
         logger.error(
             f"[Inference] Cannot estimate inference pool size on device: {device}, because model: {model_id} is not supported."
         )
@@ -67,8 +69,8 @@ def estimate_pool_size(device: torch.device, model_id: str) -> int:
     system_res = evaluate_system_resources(device)
     free_mem = system_res["free_mem"]
 
-    mem_usage = MODEL_MEM_USAGE_MAP[model_info.model_id] * INFERENCE_EXTRA_MEMORY_RATIO
-    size = int((free_mem * INFERENCE_MEMORY_USAGE_RATIO) // mem_usage)
+    mem_usage = model_mem_usage_map[model_id] * inference_extra_memory_ratio
+    size = int((free_mem * inference_memory_usage_ratio) // mem_usage)
     if size <= 0:
         logger.error(
             f"[Inference][Device-{device}] Not enough memory to run model {model_id}. free={free_mem/1024**2:.2f} MB, need>={mem_usage/1024**2:.2f} MB"

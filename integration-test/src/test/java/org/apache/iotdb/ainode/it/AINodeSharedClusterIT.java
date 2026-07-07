@@ -26,8 +26,11 @@ import org.apache.iotdb.it.framework.IoTDBTestRunner;
 import org.apache.iotdb.itbase.category.AIClusterIT;
 import org.apache.iotdb.itbase.env.BaseEnv;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import org.junit.AfterClass;
 import org.junit.Assert;
+import org.junit.Assume;
 import org.junit.BeforeClass;
 import org.junit.FixMethodOrder;
 import org.junit.Test;
@@ -37,26 +40,35 @@ import org.junit.runners.MethodSorters;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.File;
+import java.io.FileReader;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.iotdb.ainode.utils.AINodeTestUtils.BUILTIN_LTSM_MAP;
 import static org.apache.iotdb.ainode.utils.AINodeTestUtils.BUILTIN_MODEL_MAP;
+import static org.apache.iotdb.ainode.utils.AINodeTestUtils.assertInferenceOutputClose;
 import static org.apache.iotdb.ainode.utils.AINodeTestUtils.checkHeader;
 import static org.apache.iotdb.ainode.utils.AINodeTestUtils.checkModelNotOnSpecifiedDevice;
 import static org.apache.iotdb.ainode.utils.AINodeTestUtils.checkModelOnSpecifiedDevice;
+import static org.apache.iotdb.ainode.utils.AINodeTestUtils.concurrentDualCallInference;
 import static org.apache.iotdb.ainode.utils.AINodeTestUtils.concurrentInference;
+import static org.apache.iotdb.ainode.utils.AINodeTestUtils.dynamicBatchOutputTolerance;
 import static org.apache.iotdb.ainode.utils.AINodeTestUtils.errorTest;
+import static org.apache.iotdb.ainode.utils.AINodeTestUtils.fetchCallInferenceOutput;
 import static org.apache.iotdb.ainode.utils.AINodeTestUtils.prepareDataInTable;
 import static org.apache.iotdb.ainode.utils.AINodeTestUtils.prepareDataInTree;
 import static org.junit.Assert.assertEquals;
@@ -81,9 +93,10 @@ public class AINodeSharedClusterIT {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(AINodeSharedClusterIT.class);
 
-  private static final String TARGET_DEVICES_STR = "0,1";
-  private static final Set<String> TARGET_DEVICES =
-      new HashSet<>(Arrays.asList(TARGET_DEVICES_STR.split(",")));
+  /** Populated after cluster startup from {@code SHOW AI_DEVICES}; defaults suit 2-GPU CI. */
+  private static String targetDevicesStr = "0,1";
+
+  private static Set<String> targetDevices = new HashSet<>(Arrays.asList("0", "1"));
 
   private static final String CALL_INFERENCE_SQL_TEMPLATE =
       "CALL INFERENCE(%s, \"SELECT s%d FROM root.AI LIMIT %d\", generateTime=true, outputLength=%d)";
@@ -93,6 +106,9 @@ public class AINodeSharedClusterIT {
   private static final int DEFAULT_OUTPUT_LENGTH = 48;
   private static final int LOADED_MODEL_SMOKE_INPUT_LENGTH = 96;
   private static final int LOADED_MODEL_SMOKE_OUTPUT_LENGTH = 1;
+  private static final int DYNAMIC_BATCH_INPUT_A = 96;
+  private static final int DYNAMIC_BATCH_INPUT_B = 104;
+  private static final int DYNAMIC_BATCH_OUTPUT_LENGTH = 1;
   private static final List<String> LTSM_LOAD_DEVICE_COMBINATIONS =
       Arrays.asList("cpu", "0", "cpu,0");
 
@@ -117,9 +133,68 @@ public class AINodeSharedClusterIT {
   @BeforeClass
   public static void setUp() throws Exception {
     EnvFactory.getEnv().initClusterEnvironment(1, 1);
+    initializeTargetDevicesFromCluster();
     prepareDataInTree();
     prepareDataInTable();
     prepareDataForConcurrentForecast();
+  }
+
+  private static void initializeTargetDevicesFromCluster() throws SQLException {
+    List<String> cudaDevices = new ArrayList<>();
+    try (Connection connection = EnvFactory.getEnv().getConnection(BaseEnv.TREE_SQL_DIALECT);
+        Statement statement = connection.createStatement();
+        ResultSet resultSet = statement.executeQuery("SHOW AI_DEVICES")) {
+      while (resultSet.next()) {
+        if ("cuda".equals(resultSet.getString(2))) {
+          cudaDevices.add(resultSet.getString(1));
+        }
+      }
+    }
+    Collections.sort(cudaDevices);
+    if (cudaDevices.isEmpty()) {
+      targetDevicesStr = "cpu";
+      targetDevices = new HashSet<>();
+    } else {
+      targetDevicesStr = String.join(",", cudaDevices);
+      targetDevices = new HashSet<>(cudaDevices);
+    }
+    LOGGER.info("AINode IT target CUDA devices: {}", targetDevicesStr);
+  }
+
+  private static boolean isUserDefinedModelFixtureAvailable(String ciPath) {
+    return new File(ciPath, "config.json").exists();
+  }
+
+  private static String userDefinedModelUri(String ciPath) {
+    return "file://" + ciPath;
+  }
+
+  private static String readModelTypeFromConfig(String localPath) {
+    File configFile = new File(localPath, "config.json");
+    if (!configFile.exists()) {
+      throw new IllegalStateException("No config.json at " + localPath);
+    }
+    try (FileReader reader = new FileReader(configFile, StandardCharsets.UTF_8)) {
+      JsonObject config = JsonParser.parseReader(reader).getAsJsonObject();
+      return config.get("model_type").getAsString();
+    } catch (IOException e) {
+      throw new IllegalStateException("Failed to read config.json from " + localPath, e);
+    }
+  }
+
+  private static FakeModelInfo userDefinedModelInfo(String modelId, String ciPath) {
+    String modelType = readModelTypeFromConfig(ciPath);
+    return new FakeModelInfo(modelId, modelType, "user_defined", "active");
+  }
+
+  private static void dropUserDefinedModelIfExists(Statement statement, String modelId)
+      throws SQLException {
+    final String showSql = String.format("SHOW MODELS %s", modelId);
+    try (ResultSet resultSet = statement.executeQuery(showSql)) {
+      if (resultSet.next()) {
+        statement.execute(String.format("DROP MODEL %s", modelId));
+      }
+    }
   }
 
   @AfterClass
@@ -147,17 +222,20 @@ public class AINodeSharedClusterIT {
 
   private void showAIDevicesTest(Statement statement) throws SQLException {
     final String showSql = "SHOW AI_DEVICES";
-    final List<String> expectedDeviceIdList = new LinkedList<>(Arrays.asList("0", "1", "cpu"));
-    final List<String> expectedDeviceTypeList =
-        new LinkedList<>(Arrays.asList("cuda", "cuda", "cpu"));
     try (ResultSet resultSet = statement.executeQuery(showSql)) {
       ResultSetMetaData resultSetMetaData = resultSet.getMetaData();
       checkHeader(resultSetMetaData, "DeviceId,DeviceType");
+      java.util.Map<String, String> devices = new java.util.LinkedHashMap<>();
       while (resultSet.next()) {
-        String deviceId = resultSet.getString(1);
-        String deviceType = resultSet.getString(2);
-        Assert.assertEquals(expectedDeviceIdList.remove(0), deviceId);
-        Assert.assertEquals(expectedDeviceTypeList.remove(0), deviceType);
+        devices.put(resultSet.getString(1), resultSet.getString(2));
+      }
+      Assert.assertTrue("SHOW AI_DEVICES must include cpu", devices.containsKey("cpu"));
+      Assert.assertEquals("cpu", devices.get("cpu"));
+      long cudaDeviceCount = devices.values().stream().filter(type -> "cuda".equals(type)).count();
+      for (int i = 0; i < cudaDeviceCount; i++) {
+        String deviceId = String.valueOf(i);
+        Assert.assertTrue("Missing CUDA device " + deviceId, devices.containsKey(deviceId));
+        Assert.assertEquals("cuda", devices.get(deviceId));
       }
     }
   }
@@ -166,32 +244,44 @@ public class AINodeSharedClusterIT {
 
   @Test
   public void userDefinedModelManagementTestInTree() throws SQLException, InterruptedException {
+    Assume.assumeTrue(
+        "CI user-defined model fixtures are unavailable",
+        isUserDefinedModelFixtureAvailable("/data/chronos2")
+            && isUserDefinedModelFixtureAvailable("/data/mantis"));
     try (Connection connection = EnvFactory.getEnv().getConnection(BaseEnv.TREE_SQL_DIALECT);
         Statement statement = connection.createStatement()) {
-      FakeModelInfo modelInfo =
-          new FakeModelInfo("user_chronos", "custom_t5", "user_defined", "active");
-      registerUserDefinedModel(statement, modelInfo, "file:///data/chronos2");
+      dropUserDefinedModelIfExists(statement, "user_chronos");
+      dropUserDefinedModelIfExists(statement, "user_mantis");
+
+      FakeModelInfo modelInfo = userDefinedModelInfo("user_chronos", "/data/chronos2");
+      registerUserDefinedModel(statement, modelInfo, userDefinedModelUri("/data/chronos2"));
       callInferenceTest(statement, modelInfo);
       dropUserDefinedModel(statement, modelInfo.getModelId());
 
-      modelInfo = new FakeModelInfo("user_mantis", "custom_mantis", "user_defined", "active");
-      registerUserDefinedModel(statement, modelInfo, "file:///data/mantis");
+      modelInfo = userDefinedModelInfo("user_mantis", "/data/mantis");
+      registerUserDefinedModel(statement, modelInfo, userDefinedModelUri("/data/mantis"));
       dropUserDefinedModel(statement, modelInfo.getModelId());
     }
   }
 
   @Test
   public void userDefinedModelManagementTestInTable() throws SQLException, InterruptedException {
+    Assume.assumeTrue(
+        "CI user-defined model fixtures are unavailable",
+        isUserDefinedModelFixtureAvailable("/data/chronos2")
+            && isUserDefinedModelFixtureAvailable("/data/mantis"));
     try (Connection connection = EnvFactory.getEnv().getConnection(BaseEnv.TABLE_SQL_DIALECT);
         Statement statement = connection.createStatement()) {
-      FakeModelInfo modelInfo =
-          new FakeModelInfo("user_chronos", "custom_t5", "user_defined", "active");
-      registerUserDefinedModel(statement, modelInfo, "file:///data/chronos2");
+      dropUserDefinedModelIfExists(statement, "user_chronos");
+      dropUserDefinedModelIfExists(statement, "user_mantis");
+
+      FakeModelInfo modelInfo = userDefinedModelInfo("user_chronos", "/data/chronos2");
+      registerUserDefinedModel(statement, modelInfo, userDefinedModelUri("/data/chronos2"));
       forecastTableFunctionTest(statement, modelInfo);
       dropUserDefinedModel(statement, modelInfo.getModelId());
 
-      modelInfo = new FakeModelInfo("user_mantis", "custom_mantis", "user_defined", "active");
-      registerUserDefinedModel(statement, modelInfo, "file:///data/mantis");
+      modelInfo = userDefinedModelInfo("user_mantis", "/data/mantis");
+      registerUserDefinedModel(statement, modelInfo, userDefinedModelUri("/data/mantis"));
       dropUserDefinedModel(statement, modelInfo.getModelId());
     }
   }
@@ -445,6 +535,58 @@ public class AINodeSharedClusterIT {
   // ========== Concurrent forecast tests ==========
 
   @Test
+  public void dynamicBatchingOutputConsistencyTest() throws SQLException, InterruptedException {
+    Assume.assumeTrue(
+        "CUDA devices required for loaded-model inference pool", !targetDevices.isEmpty());
+    final String devices = targetDevices.iterator().next();
+    try (Connection treeConnection = EnvFactory.getEnv().getConnection(BaseEnv.TREE_SQL_DIALECT);
+        Statement treeStatement = treeConnection.createStatement()) {
+      for (FakeModelInfo modelInfo : BUILTIN_LTSM_MAP.values()) {
+        final String modelId = modelInfo.getModelId();
+        treeStatement.execute(String.format("LOAD MODEL %s TO DEVICES '%s'", modelId, devices));
+        try {
+          checkModelOnSpecifiedDevice(treeStatement, modelId, devices);
+          final double tolerance = dynamicBatchOutputTolerance(modelId);
+          final double[] singleSameA =
+              fetchCallInferenceOutput(
+                  treeStatement, modelId, 0, DYNAMIC_BATCH_INPUT_A, DYNAMIC_BATCH_OUTPUT_LENGTH);
+          final double[] singleSameB =
+              fetchCallInferenceOutput(
+                  treeStatement, modelId, 0, DYNAMIC_BATCH_INPUT_A, DYNAMIC_BATCH_OUTPUT_LENGTH);
+          final double[][] sameLengthBatched =
+              concurrentDualCallInference(
+                  modelId,
+                  new int[] {0, 0},
+                  new int[] {DYNAMIC_BATCH_INPUT_A, DYNAMIC_BATCH_INPUT_A},
+                  DYNAMIC_BATCH_OUTPUT_LENGTH);
+          assertInferenceOutputClose(singleSameA, sameLengthBatched[0], tolerance);
+          assertInferenceOutputClose(singleSameB, sameLengthBatched[1], tolerance);
+
+          final double[] singleLonger =
+              fetchCallInferenceOutput(
+                  treeStatement, modelId, 0, DYNAMIC_BATCH_INPUT_B, DYNAMIC_BATCH_OUTPUT_LENGTH);
+          final double[][] mixedLengthBatched =
+              concurrentDualCallInference(
+                  modelId,
+                  new int[] {0, 0},
+                  new int[] {DYNAMIC_BATCH_INPUT_A, DYNAMIC_BATCH_INPUT_B},
+                  DYNAMIC_BATCH_OUTPUT_LENGTH);
+          // Shorter requests are padded before revin normalization in a mixed batch.
+          assertInferenceOutputClose(singleLonger, mixedLengthBatched[1], tolerance);
+          LOGGER.info(
+              "Dynamic batching output consistency passed for model {} on device {}",
+              modelId,
+              devices);
+        } finally {
+          treeStatement.execute(
+              String.format("UNLOAD MODEL %s FROM DEVICES '%s'", modelId, devices));
+          checkModelNotOnSpecifiedDevice(treeStatement, modelId, devices);
+        }
+      }
+    }
+  }
+
+  @Test
   public void largeTimeSeriesModelLoadInferenceAndForecastTest()
       throws SQLException, InterruptedException {
     try (Connection treeConnection = EnvFactory.getEnv().getConnection(BaseEnv.TREE_SQL_DIALECT);
@@ -525,7 +667,7 @@ public class AINodeSharedClusterIT {
   @Test
   public void concurrentForecastTest() throws SQLException, InterruptedException {
     for (FakeModelInfo modelInfo : CONCURRENT_FORECAST_MODELS) {
-      concurrentGPUForecastTest(modelInfo, "0,1");
+      concurrentGPUForecastTest(modelInfo, targetDevicesStr);
       // TODO: Enable cpu test after optimize memory consumption
       // concurrentGPUForecastTest(modelInfo, "cpu");
     }
@@ -604,20 +746,20 @@ public class AINodeSharedClusterIT {
       while (resultSet.next()) {
         resultDevices.add(resultSet.getString("DeviceId"));
       }
-      Set<String> expected = new HashSet<>(TARGET_DEVICES);
+      Set<String> expected = new HashSet<>(targetDevices);
       expected.add("cpu");
       Assert.assertEquals(expected, resultDevices);
     }
 
-    statement.execute(String.format("LOAD MODEL sundial TO DEVICES '%s'", TARGET_DEVICES_STR));
-    checkModelOnSpecifiedDevice(statement, "sundial", TARGET_DEVICES_STR);
-    statement.execute(String.format("UNLOAD MODEL sundial FROM DEVICES '%s'", TARGET_DEVICES_STR));
-    checkModelNotOnSpecifiedDevice(statement, "sundial", TARGET_DEVICES_STR);
+    statement.execute(String.format("LOAD MODEL sundial TO DEVICES '%s'", targetDevicesStr));
+    checkModelOnSpecifiedDevice(statement, "sundial", targetDevicesStr);
+    statement.execute(String.format("UNLOAD MODEL sundial FROM DEVICES '%s'", targetDevicesStr));
+    checkModelNotOnSpecifiedDevice(statement, "sundial", targetDevicesStr);
 
-    statement.execute(String.format("LOAD MODEL timer_xl TO DEVICES '%s'", TARGET_DEVICES_STR));
-    checkModelOnSpecifiedDevice(statement, "timer_xl", TARGET_DEVICES_STR);
-    statement.execute(String.format("UNLOAD MODEL timer_xl FROM DEVICES '%s'", TARGET_DEVICES_STR));
-    checkModelNotOnSpecifiedDevice(statement, "timer_xl", TARGET_DEVICES_STR);
+    statement.execute(String.format("LOAD MODEL timer_xl TO DEVICES '%s'", targetDevicesStr));
+    checkModelOnSpecifiedDevice(statement, "timer_xl", targetDevicesStr);
+    statement.execute(String.format("UNLOAD MODEL timer_xl FROM DEVICES '%s'", targetDevicesStr));
+    checkModelNotOnSpecifiedDevice(statement, "timer_xl", targetDevicesStr);
   }
 
   @Test

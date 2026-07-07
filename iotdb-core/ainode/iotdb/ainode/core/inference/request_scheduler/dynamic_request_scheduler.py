@@ -60,11 +60,21 @@ class DynamicRequestScheduler(AbstractRequestScheduler):
     ):
         super().__init__(waiting_queue, running_queue, finished_queue)
         config = AINodeDescriptor().get_config()
-        self.max_memory_bytes = max_memory_bytes
-        self.max_activate_size = (
-            max_activate_size if max_activate_size is not None else 64
+        self.max_memory_bytes = (
+            max_memory_bytes
+            if max_memory_bytes is not None
+            else config.get_ain_inference_max_memory_bytes()
         )
-        self.max_step_size = max_step_size if max_step_size is not None else 64
+        self.max_activate_size = (
+            max_activate_size
+            if max_activate_size is not None
+            else config.get_ain_inference_max_activate_size()
+        )
+        self.max_step_size = (
+            max_step_size
+            if max_step_size is not None
+            else config.get_ain_inference_max_step_size()
+        )
         self.batch_waiting_window_ms = (
             batch_waiting_window_ms
             if batch_waiting_window_ms is not None
@@ -99,6 +109,12 @@ class DynamicRequestScheduler(AbstractRequestScheduler):
         self.device = None
         self._pending_waiting: List[InferenceRequest] = []
         self._pending_running: List[InferenceRequest] = []
+        self._deadline_forced_batches = 0
+
+    def consume_deadline_forced_batches(self) -> int:
+        count = self._deadline_forced_batches
+        self._deadline_forced_batches = 0
+        return count
 
     def memory_is_available(self):
         if self.device is None:
@@ -201,6 +217,10 @@ class DynamicRequestScheduler(AbstractRequestScheduler):
                 req.is_past_deadline(self.batch_deadline_ms, now) for req in batch
             )
             if self._should_dispatch_batch(batch, now, force=force):
+                if any(
+                    req.is_past_deadline(self.batch_deadline_ms, now) for req in batch
+                ):
+                    self._deadline_forced_batches += 1
                 dispatched.extend(batch)
                 for req in batch:
                     remaining_ids.discard(req.req_id)

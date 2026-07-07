@@ -26,6 +26,7 @@ from iotdb.ainode.core.config import AINodeDescriptor
 from iotdb.ainode.core.constant import TSStatusCode
 from iotdb.ainode.core.exception import (
     InferenceModelInternalException,
+    InferenceOverloadException,
     NumericalRangeException,
 )
 from iotdb.ainode.core.inference.inference_request import (
@@ -168,6 +169,8 @@ class InferenceManager:
             self._pool_controller.add_request(req, infer_proxy)
             outputs = infer_proxy.wait_for_result()
             return outputs
+        except InferenceOverloadException:
+            raise
         except Exception as e:
             logger.error(e)
             raise InferenceModelInternalException(str(e))
@@ -258,6 +261,11 @@ class InferenceManager:
                 [resp_list[0]] if single_batch else resp_list,
             )
 
+        except InferenceOverloadException as e:
+            logger.warning(e)
+            status = get_status(TSStatusCode.INFERENCE_OVERLOAD_ERROR, str(e))
+            empty = b"" if single_batch else []
+            return resp_cls(status, empty)
         except Exception as e:
             logger.error(e)
             status = get_status(TSStatusCode.AINODE_INTERNAL_ERROR, str(e))

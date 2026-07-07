@@ -103,6 +103,7 @@ class InferenceRequestPool(mp.Process):
 
     def _activate_requests(self):
         requests = self._request_scheduler.schedule_activate()
+        self._record_deadline_forced_batches()
         for request in requests:
             request.mark_running()
             self._running_queue.put(request)
@@ -176,10 +177,33 @@ class InferenceRequestPool(mp.Process):
                 )
 
         if finished_requests and record_results:
-            self._stats.record_batch(finished_requests, len(requests))
+            self._stats.record_batch(
+                finished_requests,
+                len(requests),
+                batch_result=batch_result,
+                queue_depth=self._estimate_queue_depth(),
+            )
+
+    def _record_deadline_forced_batches(self):
+        if self._stats is None:
+            return
+        forced = self._request_scheduler.consume_deadline_forced_batches()
+        if forced:
+            self._stats.record_deadline_forced_batches(forced)
+
+    def _estimate_queue_depth(self) -> int:
+        depth = 0
+        if self._waiting_queue is not None:
+            depth += self._waiting_queue.qsize()
+        if self._running_queue is not None:
+            depth += self._running_queue.qsize()
+        depth += len(self._request_scheduler._pending_waiting)
+        depth += len(self._request_scheduler._pending_running)
+        return depth
 
     def _step(self):
         all_requests: list[InferenceRequest] = self._request_scheduler.schedule_step()
+        self._record_deadline_forced_batches()
         if not all_requests:
             return
 

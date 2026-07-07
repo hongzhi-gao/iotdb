@@ -26,6 +26,7 @@ from typing import Dict, Optional
 import torch
 import torch.multiprocessing as mp
 
+from iotdb.ainode.core.config import AINodeDescriptor
 from iotdb.ainode.core.exception import InferenceModelInternalException
 from iotdb.ainode.core.inference.inference_request import (
     InferenceRequest,
@@ -298,7 +299,10 @@ class PoolController:
         """
 
         def _expand_pool_on_device(*_):
-            request_queue = mp.Queue()
+            max_queue_size = (
+                AINodeDescriptor().get_config().get_ain_inference_max_queue_size()
+            )
+            request_queue = mp.Queue(maxsize=max_queue_size)
             pool_id = self._new_pool_id.get_and_increment()
             model_info = self._model_manager.get_model_info(model_id)
             pool = InferenceRequestPool(

@@ -17,6 +17,7 @@
 #
 import os
 import re
+from typing import Optional
 
 from iotdb.ainode.core.constant import (
     AINODE_BUILD_INFO,
@@ -29,18 +30,10 @@ from iotdb.ainode.core.constant import (
     AINODE_CONF_FILE_NAME,
     AINODE_CONF_GIT_FILE_NAME,
     AINODE_CONF_POM_FILE_NAME,
-    AINODE_INFERENCE_BATCH_INTERVAL_IN_MS,
-    AINODE_INFERENCE_BATCH_WAITING_WINDOW_IN_MS,
-    AINODE_INFERENCE_BATCH_DEADLINE_IN_MS,
-    AINODE_INFERENCE_MAX_BATCH_SIZE,
-    AINODE_INFERENCE_MAX_BATCH_POINTS,
-    AINODE_INFERENCE_INPUT_LENGTH_BUCKET_SIZE,
-    AINODE_INFERENCE_OUTPUT_LENGTH_BUCKET_SIZE,
-    AINODE_INFERENCE_STATS_LOG_INTERVAL_IN_SEC,
-    AINODE_INFERENCE_EXTRA_MEMORY_RATIO,
     AINODE_INFERENCE_MAX_OUTPUT_LENGTH,
     AINODE_INFERENCE_MEMORY_USAGE_RATIO,
-    AINODE_INFERENCE_MODEL_MEM_USAGE_MAP,
+    AINODE_INFERENCE_SCHEDULING_PROFILE,
+    AINODE_INFERENCE_STATS_LOG_INTERVAL_IN_SEC,
     AINODE_LOG_DIR,
     AINODE_MODELS_BUILTIN_DIR,
     AINODE_MODELS_DIR,
@@ -53,6 +46,11 @@ from iotdb.ainode.core.constant import (
     AINODE_VERSION_INFO,
 )
 from iotdb.ainode.core.exception import BadNodeUrlException
+from iotdb.ainode.core.inference.inference_config import (
+    ResolvedInferenceConfig,
+    log_inference_config_summary,
+    resolve_inference_config,
+)
 from iotdb.ainode.core.log import Logger
 from iotdb.ainode.core.util.decorator import singleton
 from iotdb.thrift.common.ttypes import TEndPoint
@@ -76,37 +74,31 @@ class AINodeConfig(object):
         self._ain_cluster_ingress_username = AINODE_CLUSTER_INGRESS_USERNAME
         self._ain_cluster_ingress_password = AINODE_CLUSTER_INGRESS_PASSWORD
 
-        # Inference configuration
-        self._ain_inference_batch_interval_in_ms: int = (
-            AINODE_INFERENCE_BATCH_INTERVAL_IN_MS
+        # Inference configuration (operational knobs + optional advanced overrides)
+        self._ain_inference_scheduling_profile: str = (
+            AINODE_INFERENCE_SCHEDULING_PROFILE
         )
-        self._ain_inference_batch_waiting_window_in_ms: int = (
-            AINODE_INFERENCE_BATCH_WAITING_WINDOW_IN_MS
+        self._ain_inference_memory_usage_ratio: Optional[float] = (
+            AINODE_INFERENCE_MEMORY_USAGE_RATIO
         )
-        self._ain_inference_batch_deadline_in_ms: int = (
-            AINODE_INFERENCE_BATCH_DEADLINE_IN_MS
-        )
-        self._ain_inference_max_batch_size: int = AINODE_INFERENCE_MAX_BATCH_SIZE
-        self._ain_inference_max_batch_points: int = AINODE_INFERENCE_MAX_BATCH_POINTS
-        self._ain_inference_input_length_bucket_size: int = (
-            AINODE_INFERENCE_INPUT_LENGTH_BUCKET_SIZE
-        )
-        self._ain_inference_output_length_bucket_size: int = (
-            AINODE_INFERENCE_OUTPUT_LENGTH_BUCKET_SIZE
-        )
+        self._ain_inference_max_batch_size: Optional[int] = None
+        self._ain_inference_batch_interval_in_ms: Optional[int] = None
+        self._ain_inference_batch_waiting_window_in_ms: Optional[int] = None
+        self._ain_inference_batch_deadline_in_ms: Optional[int] = None
+        self._ain_inference_max_batch_points: Optional[int] = None
+        self._ain_inference_input_length_bucket_size: Optional[int] = None
+        self._ain_inference_output_length_bucket_size: Optional[int] = None
+        self._ain_inference_max_memory_bytes: Optional[int] = None
+        self._ain_inference_max_activate_size: Optional[int] = None
+        self._ain_inference_max_step_size: Optional[int] = None
+        self._ain_inference_max_queue_size: Optional[int] = None
         self._ain_inference_stats_log_interval_in_sec: int = (
             AINODE_INFERENCE_STATS_LOG_INTERVAL_IN_SEC
         )
         self._ain_inference_max_output_length: int = AINODE_INFERENCE_MAX_OUTPUT_LENGTH
-        self._ain_inference_model_mem_usage_map: dict[str, int] = (
-            AINODE_INFERENCE_MODEL_MEM_USAGE_MAP
-        )
-        self._ain_inference_memory_usage_ratio: float = (
-            AINODE_INFERENCE_MEMORY_USAGE_RATIO
-        )
-        self._ain_inference_extra_memory_ratio: float = (
-            AINODE_INFERENCE_EXTRA_MEMORY_RATIO
-        )
+        self._ain_inference_model_mem_usage_map: Optional[dict[str, int]] = None
+        self._ain_inference_extra_memory_ratio: Optional[float] = None
+        self._resolved_inference_config: Optional[ResolvedInferenceConfig] = None
         # log directory
         self._ain_logs_dir: str = AINODE_LOG_DIR
 
@@ -172,8 +164,16 @@ class AINodeConfig(object):
     def set_ain_rpc_port(self, ain_rpc_port: int) -> None:
         self._ain_rpc_port = ain_rpc_port
 
+    def get_ain_inference_scheduling_profile(self) -> str:
+        return self._resolved().scheduling_profile
+
+    def set_ain_inference_scheduling_profile(
+        self, ain_inference_scheduling_profile: str
+    ) -> None:
+        self._ain_inference_scheduling_profile = ain_inference_scheduling_profile
+
     def get_ain_inference_batch_interval_in_ms(self) -> int:
-        return self._ain_inference_batch_interval_in_ms
+        return self._resolved().batch_interval_ms
 
     def set_ain_inference_batch_interval_in_ms(
         self, ain_inference_batch_interval_in_ms: int
@@ -181,7 +181,7 @@ class AINodeConfig(object):
         self._ain_inference_batch_interval_in_ms = ain_inference_batch_interval_in_ms
 
     def get_ain_inference_batch_waiting_window_in_ms(self) -> int:
-        return self._ain_inference_batch_waiting_window_in_ms
+        return self._resolved().batch_waiting_window_ms
 
     def set_ain_inference_batch_waiting_window_in_ms(
         self, ain_inference_batch_waiting_window_in_ms: int
@@ -191,7 +191,7 @@ class AINodeConfig(object):
         )
 
     def get_ain_inference_batch_deadline_in_ms(self) -> int:
-        return self._ain_inference_batch_deadline_in_ms
+        return self._resolved().batch_deadline_ms
 
     def set_ain_inference_batch_deadline_in_ms(
         self, ain_inference_batch_deadline_in_ms: int
@@ -199,7 +199,7 @@ class AINodeConfig(object):
         self._ain_inference_batch_deadline_in_ms = ain_inference_batch_deadline_in_ms
 
     def get_ain_inference_max_batch_size(self) -> int:
-        return self._ain_inference_max_batch_size
+        return self._resolved().max_batch_size
 
     def set_ain_inference_max_batch_size(
         self, ain_inference_max_batch_size: int
@@ -207,7 +207,7 @@ class AINodeConfig(object):
         self._ain_inference_max_batch_size = ain_inference_max_batch_size
 
     def get_ain_inference_max_batch_points(self) -> int:
-        return self._ain_inference_max_batch_points
+        return self._resolved().max_batch_points
 
     def set_ain_inference_max_batch_points(
         self, ain_inference_max_batch_points: int
@@ -215,7 +215,7 @@ class AINodeConfig(object):
         self._ain_inference_max_batch_points = ain_inference_max_batch_points
 
     def get_ain_inference_input_length_bucket_size(self) -> int:
-        return self._ain_inference_input_length_bucket_size
+        return self._resolved().input_length_bucket_size
 
     def set_ain_inference_input_length_bucket_size(
         self, ain_inference_input_length_bucket_size: int
@@ -225,7 +225,7 @@ class AINodeConfig(object):
         )
 
     def get_ain_inference_output_length_bucket_size(self) -> int:
-        return self._ain_inference_output_length_bucket_size
+        return self._resolved().output_length_bucket_size
 
     def set_ain_inference_output_length_bucket_size(
         self, ain_inference_output_length_bucket_size: int
@@ -233,6 +233,36 @@ class AINodeConfig(object):
         self._ain_inference_output_length_bucket_size = (
             ain_inference_output_length_bucket_size
         )
+
+    def get_ain_inference_max_memory_bytes(self) -> int:
+        return self._resolved().max_memory_bytes
+
+    def set_ain_inference_max_memory_bytes(
+        self, ain_inference_max_memory_bytes: int
+    ) -> None:
+        self._ain_inference_max_memory_bytes = ain_inference_max_memory_bytes
+
+    def get_ain_inference_max_activate_size(self) -> int:
+        return self._resolved().max_activate_size
+
+    def set_ain_inference_max_activate_size(
+        self, ain_inference_max_activate_size: int
+    ) -> None:
+        self._ain_inference_max_activate_size = ain_inference_max_activate_size
+
+    def get_ain_inference_max_step_size(self) -> int:
+        return self._resolved().max_step_size
+
+    def set_ain_inference_max_step_size(self, ain_inference_max_step_size: int) -> None:
+        self._ain_inference_max_step_size = ain_inference_max_step_size
+
+    def get_ain_inference_max_queue_size(self) -> int:
+        return self._resolved().max_queue_size
+
+    def set_ain_inference_max_queue_size(
+        self, ain_inference_max_queue_size: int
+    ) -> None:
+        self._ain_inference_max_queue_size = ain_inference_max_queue_size
 
     def get_ain_inference_stats_log_interval_in_sec(self) -> int:
         return self._ain_inference_stats_log_interval_in_sec
@@ -253,7 +283,7 @@ class AINodeConfig(object):
         self._ain_inference_max_output_length = ain_inference_max_output_length
 
     def get_ain_inference_model_mem_usage_map(self) -> dict[str, int]:
-        return self._ain_inference_model_mem_usage_map
+        return self._resolved().model_mem_usage_map
 
     def set_ain_inference_model_mem_usage_map(
         self, ain_inference_model_mem_usage_map: dict[str, int]
@@ -261,7 +291,7 @@ class AINodeConfig(object):
         self._ain_inference_model_mem_usage_map = ain_inference_model_mem_usage_map
 
     def get_ain_inference_memory_usage_ratio(self) -> float:
-        return self._ain_inference_memory_usage_ratio
+        return self._resolved().memory_usage_ratio
 
     def set_ain_inference_memory_usage_ratio(
         self, ain_inference_memory_usage_ratio: float
@@ -269,12 +299,40 @@ class AINodeConfig(object):
         self._ain_inference_memory_usage_ratio = ain_inference_memory_usage_ratio
 
     def get_ain_inference_extra_memory_ratio(self) -> float:
-        return self._ain_inference_extra_memory_ratio
+        return self._resolved().extra_memory_ratio
 
     def set_ain_inference_extra_memory_ratio(
         self, ain_inference_extra_memory_ratio: float
     ) -> None:
         self._ain_inference_extra_memory_ratio = ain_inference_extra_memory_ratio
+
+    def get_resolved_inference_config(self) -> ResolvedInferenceConfig:
+        return self._resolved()
+
+    def resolve_inference_settings(self) -> ResolvedInferenceConfig:
+        self._resolved_inference_config = resolve_inference_config(
+            memory_usage_ratio=self._ain_inference_memory_usage_ratio,
+            scheduling_profile=self._ain_inference_scheduling_profile,
+            max_batch_size=self._ain_inference_max_batch_size,
+            batch_interval_ms=self._ain_inference_batch_interval_in_ms,
+            batch_waiting_window_ms=self._ain_inference_batch_waiting_window_in_ms,
+            batch_deadline_ms=self._ain_inference_batch_deadline_in_ms,
+            max_batch_points=self._ain_inference_max_batch_points,
+            input_length_bucket_size=self._ain_inference_input_length_bucket_size,
+            output_length_bucket_size=self._ain_inference_output_length_bucket_size,
+            max_memory_bytes=self._ain_inference_max_memory_bytes,
+            max_activate_size=self._ain_inference_max_activate_size,
+            max_step_size=self._ain_inference_max_step_size,
+            max_queue_size=self._ain_inference_max_queue_size,
+            extra_memory_ratio=self._ain_inference_extra_memory_ratio,
+            model_mem_usage_map=self._ain_inference_model_mem_usage_map,
+        )
+        return self._resolved_inference_config
+
+    def _resolved(self) -> ResolvedInferenceConfig:
+        if self._resolved_inference_config is None:
+            return self.resolve_inference_settings()
+        return self._resolved_inference_config
 
     def get_ain_logs_dir(self) -> str:
         return self._ain_logs_dir
@@ -376,9 +434,25 @@ class AINodeConfig(object):
 
 @singleton
 class AINodeDescriptor(object):
+    _DEPRECATED_INFERENCE_KEYS = {
+        "ain_inference_batch_interval_in_ms",
+        "ain_inference_batch_waiting_window_in_ms",
+        "ain_inference_batch_deadline_in_ms",
+        "ain_inference_max_batch_points",
+        "ain_inference_input_length_bucket_size",
+        "ain_inference_output_length_bucket_size",
+        "ain_inference_max_memory_bytes",
+        "ain_inference_max_activate_size",
+        "ain_inference_max_step_size",
+        "ain_inference_extra_memory_ratio",
+        "ain_inference_model_mem_usage_map",
+    }
+
     def __init__(self):
         self._config = AINodeConfig()
         self._load_config_from_file()
+        resolved = self._config.resolve_inference_settings()
+        log_inference_config_summary(resolved)
         logger.info("AINodeDescriptor is init successfully.")
 
     def _load_config_from_file(self) -> None:
@@ -420,12 +494,23 @@ class AINodeDescriptor(object):
             file_configs = load_properties(conf_file)
 
             config_keys = file_configs.keys()
+            for deprecated_key in self._DEPRECATED_INFERENCE_KEYS:
+                if deprecated_key in config_keys:
+                    logger.warning(
+                        f"Config key '{deprecated_key}' is advanced/deprecated; prefer "
+                        "ain_inference_scheduling_profile and hardware auto-tuning."
+                    )
 
             if "ain_rpc_address" in config_keys:
                 self._config.set_ain_rpc_address(file_configs["ain_rpc_address"])
 
             if "ain_rpc_port" in config_keys:
                 self._config.set_ain_rpc_port(int(file_configs["ain_rpc_port"]))
+
+            if "ain_inference_scheduling_profile" in config_keys:
+                self._config.set_ain_inference_scheduling_profile(
+                    file_configs["ain_inference_scheduling_profile"]
+                )
 
             if "ain_inference_batch_interval_in_ms" in config_keys:
                 self._config.set_ain_inference_batch_interval_in_ms(
@@ -460,6 +545,26 @@ class AINodeDescriptor(object):
             if "ain_inference_output_length_bucket_size" in config_keys:
                 self._config.set_ain_inference_output_length_bucket_size(
                     int(file_configs["ain_inference_output_length_bucket_size"])
+                )
+
+            if "ain_inference_max_memory_bytes" in config_keys:
+                self._config.set_ain_inference_max_memory_bytes(
+                    int(file_configs["ain_inference_max_memory_bytes"])
+                )
+
+            if "ain_inference_max_activate_size" in config_keys:
+                self._config.set_ain_inference_max_activate_size(
+                    int(file_configs["ain_inference_max_activate_size"])
+                )
+
+            if "ain_inference_max_step_size" in config_keys:
+                self._config.set_ain_inference_max_step_size(
+                    int(file_configs["ain_inference_max_step_size"])
+                )
+
+            if "ain_inference_max_queue_size" in config_keys:
+                self._config.set_ain_inference_max_queue_size(
+                    int(file_configs["ain_inference_max_queue_size"])
                 )
 
             if "ain_inference_stats_log_interval_in_sec" in config_keys:

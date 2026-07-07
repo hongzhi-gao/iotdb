@@ -78,6 +78,12 @@ class InferenceModelInternalException(_BaseException):
         self.message = "Inference model internal error: {0}".format(msg)
 
 
+class InferenceOverloadException(_BaseException):
+    def __init__(self, msg: str):
+        super().__init__()
+        self.message = "Inference overload: {0}".format(msg)
+
+
 class BuiltInModelNotSupportException(_BaseException):
     def __init__(self, msg: str):
         super().__init__()

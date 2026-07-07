@@ -15,11 +15,15 @@
 # specific language governing permissions and limitations
 # under the License.
 #
+from queue import Full
 from typing import Dict, Tuple
 
 import torch.multiprocessing as mp
 
-from iotdb.ainode.core.exception import InferenceModelInternalException
+from iotdb.ainode.core.exception import (
+    InferenceModelInternalException,
+    InferenceOverloadException,
+)
 from iotdb.ainode.core.inference.dispatcher.basic_dispatcher import BasicDispatcher
 from iotdb.ainode.core.inference.inference_request import (
     InferenceRequest,
@@ -29,6 +33,7 @@ from iotdb.ainode.core.inference.inference_request_pool import (
     InferenceRequestPool,
     PoolState,
 )
+from iotdb.ainode.core.inference.stats.admission_stats import AdmissionStats
 from iotdb.ainode.core.log import Logger
 from iotdb.ainode.core.util.atmoic_int import AtomicInt
 
@@ -81,9 +86,17 @@ class PoolGroup:
     ):
         pool_id = self.request_dispatcher.dispatch_request(req, self.get_pool_ids())
         req_q = self.pool_group[pool_id][1]
+        queue_size = req_q.qsize()
         self.pool_remaining_reqs[pool_id].increment_and_get()
         infer_proxy.set_counter(self.pool_remaining_reqs[pool_id])
-        req_q.put(req)
+        try:
+            req_q.put_nowait(req)
+        except Full:
+            self.pool_remaining_reqs[pool_id].decrement_and_get()
+            AdmissionStats.record_reject(self.model_id, pool_id, queue_size)
+            raise InferenceOverloadException(
+                f"Pool-{pool_id} waiting queue is full (size={queue_size})"
+            )
         logger.debug(
             f"[Inference][Pool-{pool_id}][Req-{req.req_id}] Request is queued for inference"
         )

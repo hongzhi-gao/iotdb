@@ -30,3 +30,19 @@ class BatchResult:
     requests: List[InferenceRequest]
     batch_output_length: int
     padded_input_length: int
+
+    def useful_input_points(self) -> int:
+        return sum(
+            req.batch_size * req.target_count * req.input_length
+            for req in self.requests
+        )
+
+    def total_input_points(self) -> int:
+        batch_size, target_count, _ = self.batch_inputs.shape
+        return batch_size * target_count * self.padded_input_length
+
+    def padding_waste_ratio(self) -> float:
+        total = self.total_input_points()
+        if total <= 0:
+            return 0.0
+        return 1.0 - self.useful_input_points() / total

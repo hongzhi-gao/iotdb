@@ -33,13 +33,17 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.AbstractMap;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -295,6 +299,117 @@ public class AINodeTestUtils {
       }
       statement.executeBatch();
     }
+  }
+
+  public static double[] fetchCallInferenceOutput(
+      Statement statement,
+      String modelId,
+      int seriesIdx,
+      int inputLength,
+      int outputLength)
+      throws SQLException {
+    String sql =
+        String.format(
+            "CALL INFERENCE(%s, \"SELECT s%d FROM root.AI LIMIT %d\", generateTime=true, outputLength=%d)",
+            modelId, seriesIdx, inputLength, outputLength);
+    List<Double> values = new ArrayList<>();
+    try (ResultSet resultSet = statement.executeQuery(sql)) {
+      while (resultSet.next()) {
+        values.add(resultSet.getDouble("output"));
+      }
+    }
+    assertEquals(outputLength, values.size());
+    double[] output = new double[values.size()];
+    for (int i = 0; i < values.size(); i++) {
+      output[i] = values.get(i);
+    }
+    return output;
+  }
+
+  public static void assertInferenceOutputClose(
+      double[] expected, double[] actual, double tolerance) {
+    assertEquals(expected.length, actual.length);
+    for (int i = 0; i < expected.length; i++) {
+      assertEquals(expected[i], actual[i], tolerance);
+    }
+  }
+
+  /** Sundial uses stochastic diffusion sampling; allow a wider numeric tolerance in ITs. */
+  public static double dynamicBatchOutputTolerance(String modelId) {
+    return "sundial".equals(modelId) ? 0.1 : 1e-2;
+  }
+
+  /**
+   * Fire two CALL INFERENCE requests concurrently so they can be dynamically batched. Returns
+   * outputs in the same order as {@code inputLengths}.
+   */
+  public static double[][] concurrentDualCallInference(
+      String modelId, int[] seriesIdx, int[] inputLengths, int outputLength)
+      throws InterruptedException {
+    if (inputLengths.length != 2 || seriesIdx.length != 2) {
+      throw new IllegalArgumentException("Only dual concurrent inference is supported");
+    }
+    final double[][] outputs = new double[2][];
+    final CountDownLatch ready = new CountDownLatch(2);
+    final CountDownLatch start = new CountDownLatch(1);
+    final AtomicReference<Throwable> error = new AtomicReference<>();
+
+    Runnable firstTask =
+        () -> {
+          try (Connection connection =
+                  EnvFactory.getEnv().getConnection(BaseEnv.TREE_SQL_DIALECT);
+              Statement statement = connection.createStatement()) {
+            ready.countDown();
+            if (!start.await(1, TimeUnit.MINUTES)) {
+              throw new SQLException("Timed out waiting for concurrent inference start gate");
+            }
+            outputs[0] =
+                fetchCallInferenceOutput(
+                    statement, modelId, seriesIdx[0], inputLengths[0], outputLength);
+          } catch (Throwable throwable) {
+            error.compareAndSet(null, throwable);
+          }
+        };
+    Runnable secondTask =
+        () -> {
+          try (Connection connection =
+                  EnvFactory.getEnv().getConnection(BaseEnv.TREE_SQL_DIALECT);
+              Statement statement = connection.createStatement()) {
+            ready.countDown();
+            if (!start.await(1, TimeUnit.MINUTES)) {
+              throw new SQLException("Timed out waiting for concurrent inference start gate");
+            }
+            outputs[1] =
+                fetchCallInferenceOutput(
+                    statement, modelId, seriesIdx[1], inputLengths[1], outputLength);
+          } catch (Throwable throwable) {
+            error.compareAndSet(null, throwable);
+          }
+        };
+
+    Thread first = new Thread(firstTask, "ainode-it-inference-0");
+    Thread second = new Thread(secondTask, "ainode-it-inference-1");
+    first.start();
+    second.start();
+    if (!ready.await(1, TimeUnit.MINUTES)) {
+      fail("Timed out waiting for concurrent inference threads to become ready");
+    }
+    start.countDown();
+    first.join(TimeUnit.MINUTES.toMillis(10));
+    second.join(TimeUnit.MINUTES.toMillis(10));
+    if (first.isAlive() || second.isAlive()) {
+      fail("Concurrent inference thread timed out after 10 minutes");
+    }
+    if (error.get() != null) {
+      if (error.get() instanceof SQLException) {
+        throw new RuntimeException((SQLException) error.get());
+      }
+      if (error.get() instanceof RuntimeException) {
+        throw (RuntimeException) error.get();
+      }
+      throw new RuntimeException(error.get());
+    }
+    return outputs;
   }
 
   public static class FakeModelInfo {
