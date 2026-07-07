@@ -50,6 +50,7 @@
         <iotdb.deps.dir>${project.basedir}/third-party</iotdb.deps.dir>
         <iotdb.offline>OFF</iotdb.offline>
         <with.ssl>ON</with.ssl>
+        <iotdb.ssl.provider>TONGSUO</iotdb.ssl.provider>
         <thrift.git.commit>6dfb0b26ea6b9ab9c114e0ef4c0f6e7b8110b242</thrift.git.commit>
         <tongsuo.git.ref>8.4.0</tongsuo.git.ref>
         <tongsuo.tarball.sha256>57c2741750a699bfbdaa1bbe44a5733e9c8fc65d086c210151cfbc2bbd6fc975</tongsuo.tarball.sha256>
@@ -116,6 +117,7 @@
                                 <option>-DCMAKE_INSTALL_PREFIX=${cmake.install.prefix}</option>
                                 <option>-DBUILD_TESTING=${build.tests}</option>
                                 <option>-DWITH_SSL=${with.ssl}</option>
+                                <option>-DIOTDB_SSL_PROVIDER=${iotdb.ssl.provider}</option>
                                 <option>-DTHRIFT_GIT_COMMIT=${thrift.git.commit}</option>
                                 <option>-DTONGSUO_GIT_REF=${tongsuo.git.ref}</option>
                                 <option>-DTONGSUO_TARBALL_SHA256=${tongsuo.tarball.sha256}</option>

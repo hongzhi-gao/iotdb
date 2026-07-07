@@ -336,6 +336,21 @@ void loadTlsIdentityFromPem(SSL_CTX* ctx, const std::string& path) {
   }
 }
 
+void loadTlsIdentityFromPemFiles(SSL_CTX* ctx, const std::string& certPath,
+                                 const std::string& keyPath) {
+  ensureFileReadable(certPath, "Client certificate");
+  ensureFileReadable(keyPath, "Client private key");
+  if (SSL_CTX_use_certificate_file(ctx, certPath.c_str(), SSL_FILETYPE_PEM) != 1) {
+    throwSslError("Failed to load PEM client certificate from " + certPath);
+  }
+  if (SSL_CTX_use_PrivateKey_file(ctx, keyPath.c_str(), SSL_FILETYPE_PEM) != 1) {
+    throwSslError("Failed to load PEM client private key from " + keyPath);
+  }
+  if (SSL_CTX_check_private_key(ctx) != 1) {
+    throwSslError("Client certificate and private key do not match");
+  }
+}
+
 void loadTlsKeyStore(SSL_CTX* ctx, const std::string& path, const std::string& password) {
   rejectJksPath(path, "Key store");
   ensureFileReadable(path, "Key store");
@@ -519,6 +534,13 @@ SSL_CTX* createTlsClientContext(const SslConfig& config) {
   }
   if (hasText(config.keyStore)) {
     loadTlsKeyStore(ctx, config.keyStore, config.keyStorePwd);
+  } else if (hasText(config.certFilePath) || hasText(config.keyFilePath)) {
+    if (!hasText(config.certFilePath) || !hasText(config.keyFilePath)) {
+      SSL_CTX_free(ctx);
+      throw IoTDBException(
+          "certFile and keyFile must both be set for PEM client identity");
+    }
+    loadTlsIdentityFromPemFiles(ctx, config.certFilePath, config.keyFilePath);
   }
   return ctx;
 }
@@ -552,8 +574,22 @@ void validatePkcs12Store(const std::string& path, const std::string& password) {
   Pkcs12ParsedIdentity parsed;
   if (PKCS12_parse(p12, password.empty() ? nullptr : password.c_str(), &parsed.pkey, &parsed.cert,
                    &parsed.ca) != 1) {
+    bool foundCert = false;
+    forEachPkcs12Bag(p12, password, [&](PKCS12_SAFEBAG* bag) {
+      if (PKCS12_SAFEBAG_get_nid(bag) == NID_certBag) {
+        X509* bagCert = PKCS12_certbag2x509(bag);
+        if (bagCert != nullptr) {
+          validateCertificate(bagCert);
+          X509_free(bagCert);
+          foundCert = true;
+        }
+      }
+    });
     PKCS12_free(p12);
-    throw IoTDBException("Failed to parse PKCS12 store: " + path);
+    if (!foundCert) {
+      throw IoTDBException("Failed to parse PKCS12 store: " + path);
+    }
+    return;
   }
   if (parsed.cert != nullptr) {
     validateCertificate(parsed.cert);
@@ -674,6 +710,13 @@ void RpcSslUtils::enableNtlsOnSsl(SSL* ssl) {
 
 SSL_CTX* RpcSslUtils::createClientSslContext(const SslConfig& config) {
   const std::string protocol = resolveProtocol(config.sslProtocol);
+#ifdef IOTDB_SSL_PROVIDER_SYSTEM
+  if (isTlcpProtocol(protocol)) {
+    throw IoTDBException(
+        "TLCP/NTLS requires IOTDB_SSL_PROVIDER=TONGSUO; "
+        "rebuild with the default bundled Tongsuo provider");
+  }
+#endif
   if (isTlcpProtocol(protocol)) {
     return createTlcpClientContext(config);
   }

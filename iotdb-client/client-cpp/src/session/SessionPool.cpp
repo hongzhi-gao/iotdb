@@ -134,6 +134,16 @@ SessionPool& SessionPool::setKeyStorePwd(std::string keyStorePwd) {
   return *this;
 }
 
+SessionPool& SessionPool::setCertFilePath(std::string path) {
+  certFilePath_ = std::move(path);
+  return *this;
+}
+
+SessionPool& SessionPool::setKeyFilePath(std::string path) {
+  keyFilePath_ = std::move(path);
+  return *this;
+}
+
 std::shared_ptr<Session> SessionPool::constructNewSession() {
   AbstractSessionBuilder builder;
   builder.host = host_;
@@ -156,6 +166,8 @@ std::shared_ptr<Session> SessionPool::constructNewSession() {
   builder.trustStorePwd = trustStorePwd_;
   builder.keyStore = keyStore_;
   builder.keyStorePwd = keyStorePwd_;
+  builder.certFilePath = certFilePath_;
+  builder.keyFilePath = keyFilePath_;
 
   auto session = std::make_shared<Session>(&builder);
   session->open(enableRPCCompression_, connectTimeoutMs_);

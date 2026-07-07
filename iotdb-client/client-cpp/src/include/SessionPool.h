@@ -193,8 +193,10 @@ public:
   SessionPool& setTrustStorePwd(std::string trustStorePwd);
   SessionPool& setKeyStore(std::string keyStore);
   SessionPool& setKeyStorePwd(std::string keyStorePwd);
+  SessionPool& setCertFilePath(std::string path);
+  SessionPool& setKeyFilePath(std::string path);
 
-  // Borrow a Session. Blocks until one is free or a new one can be created,
+  // Borrow a Session.
   // up to timeoutMs (<= 0 means use the pool default). Throws IoTDBException on
   // timeout or when the pool is closed.
   PooledSession getSession();
@@ -259,6 +261,8 @@ private:
   std::string trustStorePwd_;
   std::string keyStore_;
   std::string keyStorePwd_;
+  std::string certFilePath_;
+  std::string keyFilePath_;
 
   // pool sizing / waiting policy
   size_t maxSize_;
@@ -349,6 +353,10 @@ public:
     AbstractSessionBuilder::trustCertFilePath = v;
     return this;
   }
+  /** OpenSSL-style alias for trustCertFilePath (PEM CA file for server trust). */
+  SessionPoolBuilder* caFile(const std::string& v) {
+    return trustCertFilePath(v);
+  }
   SessionPoolBuilder* sslProtocol(const std::string& v) {
     AbstractSessionBuilder::sslProtocol = v;
     return this;
@@ -367,6 +375,16 @@ public:
   }
   SessionPoolBuilder* keyStorePwd(const std::string& v) {
     AbstractSessionBuilder::keyStorePwd = v;
+    return this;
+  }
+  /** OpenSSL-style PEM client certificate path (requires keyFile). */
+  SessionPoolBuilder* certFile(const std::string& v) {
+    AbstractSessionBuilder::certFilePath = v;
+    return this;
+  }
+  /** OpenSSL-style PEM client private key path (requires certFile). */
+  SessionPoolBuilder* keyFile(const std::string& v) {
+    AbstractSessionBuilder::keyFilePath = v;
     return this;
   }
   SessionPoolBuilder* maxSize(size_t v) {
@@ -415,7 +433,9 @@ public:
         .setTrustStore(AbstractSessionBuilder::trustStore)
         .setTrustStorePwd(AbstractSessionBuilder::trustStorePwd)
         .setKeyStore(AbstractSessionBuilder::keyStore)
-        .setKeyStorePwd(AbstractSessionBuilder::keyStorePwd);
+        .setKeyStorePwd(AbstractSessionBuilder::keyStorePwd)
+        .setCertFilePath(AbstractSessionBuilder::certFilePath)
+        .setKeyFilePath(AbstractSessionBuilder::keyFilePath);
     return pool;
   }
 

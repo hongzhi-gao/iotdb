@@ -367,6 +367,7 @@ pass them as Maven properties (the POM maps them to `-D` options for CMake):
 | CMake variable | Maven property (`-D...`) |
 |----------------|--------------------------|
 | `WITH_SSL` | `with.ssl` (e.g. `-Dwith.ssl=ON`) |
+| `IOTDB_SSL_PROVIDER` | `iotdb.ssl.provider` (`TONGSUO` or `SYSTEM`) |
 | `IOTDB_OFFLINE` | `iotdb.offline` |
 | `BUILD_TESTING` | `build.tests` |
 | `IOTDB_DEPS_DIR` | `iotdb.deps.dir` |
@@ -378,7 +379,8 @@ etc. directly.
 
 | Option                | Default                          | Purpose                                                                                                  |
 |-----------------------|----------------------------------|----------------------------------------------------------------------------------------------------------|
-| `WITH_SSL`            | `ON`                             | Link against Tongsuo (OpenSSL-compatible) and bundle its runtime libraries. See *SSL* below.               |
+| `WITH_SSL`            | `ON`                             | Enable SSL/TLS. See *SSL* below.                                                                           |
+| `IOTDB_SSL_PROVIDER`  | `TONGSUO`                        | `TONGSUO`: bundled Tongsuo (TLS + TLCP, default for releases/CI). `SYSTEM`: host OpenSSL 3.x (TLS only). |
 | `BUILD_TESTING`       | `OFF` (Maven sets `ON` for verify) | Build Catch2 IT executables (Catch2 v2.13.7 header downloaded at configure time).                        |
 | `CATCH2_INCLUDE_DIR`  | (unset)                          | Pre-downloaded Catch2 include dir (Maven sets this under `target/test/catch2`).                          |
 | `IOTDB_OFFLINE`       | `OFF`                            | Disallow any network access during configure.                                                            |
@@ -512,15 +514,24 @@ the GNU autotools tarballs assume a POSIX shell environment.
 `iotdb_session` builds **with SSL/TLS by default** (`WITH_SSL=ON`). Disable
 it with `-Dwith.ssl=OFF` (Maven) or `-DWITH_SSL=OFF` (standalone CMake).
 
-[Tongsuo](https://github.com/Tongsuo-Project/Tongsuo) **8.4.0** is
-**always built from source** during configure (Apache-2.0 licensed,
-OpenSSL-compatible API). It adds Chinese commercial cipher and TLCP protocol
-support on top of standard TLS. The resulting `libssl` / `libcrypto` shared
-libraries are **bundled into the package `lib/` directory** (next to
-`iotdb_session`, which records an `$ORIGIN`/`@loader_path` runtime path) so the
-published SDK is self-contained.
+### SSL provider (`IOTDB_SSL_PROVIDER`)
 
-Host prerequisites when `WITH_SSL=ON`:
+| Value | Default | Behavior |
+|-------|---------|----------|
+| `TONGSUO` | yes | Build [Tongsuo](https://github.com/Tongsuo-Project/Tongsuo) **8.4.0** from a pinned tag with verified tarball SHA256. Bundles `libssl`/`libcrypto` into the SDK `lib/` directory. Supports standard TLS and TLCP/NTLS. Used by CI and release packages. |
+| `SYSTEM` | no | Link against the host OpenSSL 3.x installation (`find_package(OpenSSL)`). TLS only — TLCP/NTLS is disabled. Host SSL libraries are **not** bundled into the SDK zip. For source builds on machines that already ship OpenSSL. |
+
+Maven: `-Diotdb.ssl.provider=SYSTEM` (releases and CI stay on `TONGSUO`).
+Standalone CMake: `-DIOTDB_SSL_PROVIDER=SYSTEM`.
+
+When `IOTDB_SSL_PROVIDER=TONGSUO`, Tongsuo is **always built from source**
+during configure (Apache-2.0 licensed, OpenSSL-compatible API). It adds Chinese
+commercial cipher and TLCP protocol support on top of standard TLS. The
+resulting `libssl` / `libcrypto` shared libraries are **bundled into the package
+`lib/` directory** (next to `iotdb_session`, which records an
+`$ORIGIN`/`@loader_path` runtime path) so the published SDK is self-contained.
+
+Host prerequisites when `WITH_SSL=ON` and `IOTDB_SSL_PROVIDER=TONGSUO`:
 
 - **Linux / macOS** – `perl`, `make`, and a C compiler (Tongsuo `./config`).
 - **Windows** – Perl (e.g. Strawberry Perl) and `nmake` from the Visual Studio
@@ -538,9 +549,19 @@ first. PEM CA files are supported via `trustStore` (PEM path) or the legacy
 | `trustStore` | Server trust material (PKCS#12 or PEM CA file) | Not JKS; `.p12`/`.pfx` = PKCS#12 |
 | `keyStore` | Client identity (PKCS#12 or PEM cert+key) | TLCP mutual auth needs dual-cert PKCS#12 |
 | `trustCertFilePath` | Legacy PEM CA path | Used only when `trustStore` is unset |
+| `caFile` | OpenSSL-style alias for `trustCertFilePath` | PEM CA file for server trust |
+| `certFile` / `keyFile` | OpenSSL-style PEM client identity | Both required; alternative to `keyStore` |
 
-OpenSSL-style PEM users can point `trustStore` at a `.pem` CA bundle, or use
-`trustCertFilePath()` for the same PEM file without PKCS#12 wrapping.
+**JKS is not supported** by the C++ client — convert to PKCS#12 first.
+
+Java-style `trustStore` / `keyStore` names are kept for parity with the Java
+Session API. Native C++ users with PEM material can use `caFile()`,
+`certFile()` / `keyFile()`, or the legacy `trustCertFilePath()` without
+thinking in Java keystore terms.
+
+OpenSSL-style PEM users can point `trustStore` at a `.pem` CA bundle, use
+`caFile()` / `trustCertFilePath()` for the same PEM file, or wrap credentials
+in PKCS#12 via `trustStore` / `keyStore`.
 
 **TLS one-way (server authentication):**
 

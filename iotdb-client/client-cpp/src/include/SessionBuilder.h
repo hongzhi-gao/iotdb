@@ -44,6 +44,11 @@ public:
     return this;
   }
 
+  /** OpenSSL-style alias for trustCertFilePath (PEM CA file for server trust). */
+  SessionBuilder* caFile(const std::string& path) {
+    return trustCertFilePath(path);
+  }
+
   SessionBuilder* sslProtocol(const std::string& sslProtocol) {
     AbstractSessionBuilder::sslProtocol = sslProtocol;
     return this;
@@ -66,6 +71,18 @@ public:
 
   SessionBuilder* keyStorePwd(const std::string& keyStorePwd) {
     AbstractSessionBuilder::keyStorePwd = keyStorePwd;
+    return this;
+  }
+
+  /** OpenSSL-style PEM client certificate path (requires keyFile). */
+  SessionBuilder* certFile(const std::string& path) {
+    AbstractSessionBuilder::certFilePath = path;
+    return this;
+  }
+
+  /** OpenSSL-style PEM client private key path (requires certFile). */
+  SessionBuilder* keyFile(const std::string& path) {
+    AbstractSessionBuilder::keyFilePath = path;
     return this;
   }
 

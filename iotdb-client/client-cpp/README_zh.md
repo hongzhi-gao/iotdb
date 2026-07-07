@@ -237,16 +237,28 @@ Maven 构建会把 SDK 安装到 `target/install/`，并生成
 | CMake 变量 | Maven 属性 |
 |------------|------------|
 | `WITH_SSL` | `with.ssl`（默认 `ON`，关闭用 `-Dwith.ssl=OFF`） |
+| `IOTDB_SSL_PROVIDER` | `iotdb.ssl.provider`（`TONGSUO` 或 `SYSTEM`） |
 | `IOTDB_OFFLINE` | `iotdb.offline` |
 | `BUILD_TESTING` | `build.tests` |
 | `IOTDB_DEPS_DIR` | `iotdb.deps.dir` |
 | `BOOST_INCLUDEDIR` | `boost.include.dir` |
 | `CMAKE_BUILD_TYPE` | `cmake.build.type`，例如 `-Dcmake.build.type=Debug` |
 
-SSL 默认开启（`WITH_SSL=ON`）。配置阶段**始终从源码构建**
-[Tongsuo](https://github.com/Tongsuo-Project/Tongsuo) **8.4.0**
-（OpenSSL 兼容 API，Apache-2.0，支持国密/TLCP），并把 `libssl`/`libcrypto`
-动态库复制到产物 `lib/` 目录。Windows 需要 Perl 与 VS 的 `nmake`。
+SSL 默认开启（`WITH_SSL=ON`）。
+
+**SSL 提供方（`IOTDB_SSL_PROVIDER`）**
+
+| 值 | 默认 | 说明 |
+|----|------|------|
+| `TONGSUO` | 是 | 从固定 tag 构建 [Tongsuo](https://github.com/Tongsuo-Project/Tongsuo) **8.4.0**（校验 tarball SHA256），将 `libssl`/`libcrypto` 打入 SDK `lib/`。支持 TLS 与 TLCP/NTLS。CI 与发布包使用此选项。 |
+| `SYSTEM` | 否 | 链接宿主机 OpenSSL 3.x（`find_package(OpenSSL)`），仅 TLS，不支持 TLCP/NTLS，不打包宿主机 SSL 库。适合已有 OpenSSL 的源码构建。 |
+
+Maven：`-Diotdb.ssl.provider=SYSTEM`（发布与 CI 仍为 `TONGSUO`）。
+独立 CMake：`-DIOTDB_SSL_PROVIDER=SYSTEM`。
+
+`TONGSUO` 模式下，配置阶段**始终从源码构建** Tongsuo（OpenSSL 兼容 API，
+Apache-2.0，支持国密/TLCP），并把 `libssl`/`libcrypto` 动态库复制到产物
+`lib/` 目录。Windows 需要 Perl 与 VS 的 `nmake`。
 直接使用 CMake 时传入 `-DWITH_SSL=OFF`、`-DIOTDB_OFFLINE=ON` 等即可。
 
 ### 客户端 SSL / TLCP 配置
@@ -261,6 +273,14 @@ CA 可通过 `trustStore`（指向 `.pem` 文件）或遗留的 `trustCertFilePa
 | `trustStore` | 服务端信任材料（PKCS#12 或 PEM CA） | 非 JKS；`.p12`/`.pfx` 表示 PKCS#12 |
 | `keyStore` | 客户端身份（PKCS#12 或 PEM 证书+私钥） | TLCP 双向认证需双证书 PKCS#12 |
 | `trustCertFilePath` | 遗留 PEM CA 路径 | 仅 `trustStore` 未设置时使用 |
+| `caFile` | OpenSSL 风格，等同 `trustCertFilePath` | PEM CA 文件 |
+| `certFile` / `keyFile` | OpenSSL 风格 PEM 客户端证书与私钥 | 需同时设置；可替代 `keyStore` |
+
+**不支持 JKS**，需先转换为 PKCS#12。
+
+为与 Java Session API 对齐保留 `trustStore` / `keyStore` 命名。持有 PEM
+材料的 C++ 用户可直接使用 `caFile()`、`certFile()` / `keyFile()` 或遗留的
+`trustCertFilePath()`，无需按 Java keystore 概念配置。
 
 **TLS 单向认证：**
 

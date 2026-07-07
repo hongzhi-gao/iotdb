@@ -549,6 +549,8 @@ Session::Session(AbstractSessionBuilder* builder) : impl_(new Impl()) {
   impl_->sslConfig_.keyStore = builder->keyStore;
   impl_->sslConfig_.keyStorePwd = builder->keyStorePwd;
   impl_->sslConfig_.trustCertFilePath = builder->trustCertFilePath;
+  impl_->sslConfig_.certFilePath = builder->certFilePath;
+  impl_->sslConfig_.keyFilePath = builder->keyFilePath;
   impl_->initZoneId();
   impl_->initNodesSupplier(impl_->nodeUrls_);
 }

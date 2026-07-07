@@ -78,7 +78,12 @@ if(NOT MSVC)
     file(WRITE "${_iotdb_cxx11_abi_stamp}" "${_iotdb_cxx11_abi_stamp_value}")
 endif()
 
-option(WITH_SSL "Build with Tongsuo SSL/TLS support" ON)
+option(WITH_SSL "Build with SSL/TLS support" ON)
+
+# SSL provider: TONGSUO (default, bundled, TLCP-capable) or SYSTEM (host OpenSSL, TLS only).
+# Release packages and CI always use TONGSUO.
+set(IOTDB_SSL_PROVIDER "TONGSUO" CACHE STRING "SSL provider: TONGSUO or SYSTEM")
+set_property(CACHE IOTDB_SSL_PROVIDER PROPERTY STRINGS TONGSUO SYSTEM)
 option(BUILD_TESTING "Build IT test executables" OFF)
 option(IOTDB_OFFLINE "Disable all network access during configure" OFF)
 set(IOTDB_SESSION_VERSION "0.0.0"
@@ -123,7 +128,17 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(FetchBoost)        # -> BOOST_INCLUDE_DIR (Thrift build only)
 include(FetchBuildTools)
 if(WITH_SSL)
-    include(FetchOpenSSL)
+    if(IOTDB_SSL_PROVIDER STREQUAL "SYSTEM")
+        include(FetchSystemOpenSSL)
+        add_compile_definitions(IOTDB_SSL_PROVIDER_SYSTEM)
+        message(STATUS "[OpenSSL] provider=SYSTEM (TLS only; TLCP/NTLS disabled)")
+    elseif(IOTDB_SSL_PROVIDER STREQUAL "TONGSUO")
+        include(FetchOpenSSL)
+        message(STATUS "[OpenSSL] provider=TONGSUO (bundled; TLS + TLCP/NTLS)")
+    else()
+        message(FATAL_ERROR
+                "Unknown IOTDB_SSL_PROVIDER='${IOTDB_SSL_PROVIDER}'. Use TONGSUO or SYSTEM.")
+    endif()
     include(InstallOpenSSLRuntime)
 endif()
 include(FetchThrift)
@@ -149,11 +164,9 @@ if(UNIX AND NOT APPLE)
             SOVERSION "${IOTDB_SESSION_SOVERSION}")
 endif()
 
-# When SSL is on we bundle the Tongsuo/OpenSSL-compatible shared libraries next to
-# libiotdb_session in the package lib/ directory. Give the library an $ORIGIN-relative runtime
-# search path so the loader finds them without LD_LIBRARY_PATH / install_name
-# tweaks, keeping the SDK self-contained.
-if(WITH_SSL)
+# When SSL is on and Tongsuo is bundled, record an $ORIGIN-relative runtime path so the
+# loader finds libssl/libcrypto next to libiotdb_session without LD_LIBRARY_PATH tweaks.
+if(WITH_SSL AND IOTDB_SSL_BUNDLE_RUNTIME)
     if(APPLE)
         set_target_properties(iotdb_session PROPERTIES
                 BUILD_RPATH "@loader_path"
@@ -254,6 +267,7 @@ install(TARGETS iotdb_session
 
 # Ship the Tongsuo shared libraries we link against next to iotdb_session so the
 # packaged SDK is self-contained on machines without a system SSL library.
+# Skipped when IOTDB_SSL_PROVIDER=SYSTEM (host OpenSSL is not redistributed).
 if(WITH_SSL)
     iotdb_install_openssl_runtime()
 endif()
@@ -308,6 +322,7 @@ file(WRITE "${CMAKE_BINARY_DIR}/package-metadata/BUILD-INFO.txt"
         "cmake.generator=${CMAKE_GENERATOR}\n"
         "cmake.build.type=${CMAKE_BUILD_TYPE}\n"
         "with.ssl=${WITH_SSL}\n"
+        "iotdb.ssl.provider=${IOTDB_SSL_PROVIDER}\n"
         "iotdb.offline=${IOTDB_OFFLINE}\n"
         "iotdb.use.cxx11.abi=${IOTDB_USE_CXX11_ABI}\n"
         "iotdb.extra.cxx.flags=${IOTDB_EXTRA_CXX_FLAGS}\n")
@@ -328,6 +343,9 @@ endif()
 
 message(STATUS "iotdb_session configuration summary:")
 message(STATUS "    WITH_SSL              = ${WITH_SSL}")
+if(WITH_SSL)
+    message(STATUS "    IOTDB_SSL_PROVIDER    = ${IOTDB_SSL_PROVIDER}")
+endif()
 message(STATUS "    BUILD_TESTING         = ${BUILD_TESTING}")
 message(STATUS "    IOTDB_OFFLINE         = ${IOTDB_OFFLINE}")
 message(STATUS "    IOTDB_USE_CXX11_ABI   = ${IOTDB_USE_CXX11_ABI}")

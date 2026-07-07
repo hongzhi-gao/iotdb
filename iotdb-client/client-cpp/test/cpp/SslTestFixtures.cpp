@@ -53,6 +53,7 @@
 #endif
 
 #include "RpcSslUtils.h"
+#include "Common.h"
 #include "SslTestFixtures.h"
 
 #include <chrono>
@@ -486,6 +487,10 @@ bool thriftTlsHandshakeWithSslConfig(const SslConfig& config, const std::string&
       std::shared_ptr<apache::thrift::transport::TSSLSocket> socket =
           factory->createSocket(host, port);
       socket->open();
+      // TSSLSocket::open() only completes the TCP connect; TLS handshake (and
+      // certificate verification) runs on the first read/write.
+      static const char kHttpProbe[] = "GET /\r\n";
+      socket->write(reinterpret_cast<const uint8_t*>(kHttpProbe), sizeof(kHttpProbe) - 1);
       socket->close();
       return true;
     } catch (const apache::thrift::transport::TTransportException&) {

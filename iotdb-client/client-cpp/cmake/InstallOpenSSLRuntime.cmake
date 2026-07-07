@@ -77,6 +77,11 @@ function(_iotdb_collect_openssl_windows_dlls _out_var)
 endfunction()
 
 function(iotdb_install_openssl_runtime)
+    if(DEFINED IOTDB_SSL_BUNDLE_RUNTIME AND NOT IOTDB_SSL_BUNDLE_RUNTIME)
+        message(STATUS "[OpenSSL] system provider: skip bundling host SSL into SDK lib/")
+        return()
+    endif()
+
     if(WIN32)
         _iotdb_collect_openssl_windows_dlls(_dlls)
         if(NOT _dlls)

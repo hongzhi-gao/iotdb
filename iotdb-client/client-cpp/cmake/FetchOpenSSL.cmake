@@ -28,6 +28,8 @@
 #   can link against them unchanged.
 # =============================================================================
 
+set(IOTDB_SSL_BUNDLE_RUNTIME ON CACHE INTERNAL "Bundle Tongsuo SSL libs into SDK zip")
+
 # --- Build Tongsuo ${TONGSUO_GIT_REF} from source ---
 if(TONGSUO_GIT_REF MATCHES "^[0-9a-fA-F]{7,40}$")
     set(_tongsuo_extracted_dir "Tongsuo-${TONGSUO_GIT_REF}")

@@ -152,8 +152,12 @@ TEST_CASE("Thrift TSSLSocketFactory verifies server certificate when trust store
   REQUIRE(ssltest::thriftTlsHandshakeWithSslConfig(goodConfig, "127.0.0.1", server.port()));
 
   SslConfig badConfig = goodConfig;
-  badConfig.trustStore = ssltest::tlsFixture("tls-client.p12");
+  // Use an unrelated CA so server cert verification must fail (tls-client.p12 can
+  // still include the issuing CA in its PKCS#12 chain and would not be a negative case).
+  badConfig.trustStore = ssltest::tlcpFixture("ca.crt");
+  badConfig.trustStorePwd.clear();
   badConfig.keyStore.clear();
+  REQUIRE_FALSE(ssltest::tlsHandshakeWithSslConfig(badConfig, "127.0.0.1", server.port()));
   REQUIRE_FALSE(ssltest::thriftTlsHandshakeWithSslConfig(badConfig, "127.0.0.1", server.port()));
   server.stop();
 #endif

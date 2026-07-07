@@ -44,6 +44,10 @@ struct SslConfig {
   std::string keyStorePwd;
   /** Legacy PEM trust certificate path; used when trustStore is empty. */
   std::string trustCertFilePath;
+  /** OpenSSL-style PEM client certificate path (used with keyFilePath). */
+  std::string certFilePath;
+  /** OpenSSL-style PEM client private key path (used with certFilePath). */
+  std::string keyFilePath;
 
   std::string effectiveTrustStore() const;
 };

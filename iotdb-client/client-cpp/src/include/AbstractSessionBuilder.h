@@ -62,6 +62,10 @@ public:
   std::string trustStorePwd;
   std::string keyStore;
   std::string keyStorePwd;
+  /** OpenSSL-style PEM client certificate path (paired with keyFilePath). */
+  std::string certFilePath;
+  /** OpenSSL-style PEM client private key path (paired with certFilePath). */
+  std::string keyFilePath;
 };
 
 #endif // IOTDB_ABSTRACTSESSIONBUILDER_H
