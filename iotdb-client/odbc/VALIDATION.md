@@ -67,7 +67,8 @@ acceptance.
 Interactive Windows DSN dialog operation and administrator installation/removal
 have not been manually exercised. Tests do not permanently register a driver.
 Windows 10 and Server 2016 were not separately available for runtime testing.
-GitHub Actions configuration was added but has not been run remotely.
+The GitHub Actions Linux/Windows package jobs and three clean Linux runtime jobs
+passed during migration.
 HTTPS for REST and a general ODBC conformance audit are outside this migration.
 The vendored curl snapshot is retained from the original repository; upgrading
 third-party dependencies should be a separate reviewed change.

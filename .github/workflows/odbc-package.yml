@@ -37,7 +37,7 @@ jobs:
   linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Build and check glibc baseline
         run: |
           source .github/scripts/native-linux-env.sh
@@ -46,7 +46,7 @@ jobs:
       - name: Restore ownership
         if: always()
         run: sudo chown -R "$(id -u):$(id -g)" iotdb-client/odbc/target iotdb-client/client-cpp/third-party
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: odbc-linux-x86_64-glibc2.28
           path: iotdb-client/odbc/target/build/iotdb-odbc-*.zip*
@@ -54,7 +54,7 @@ jobs:
   windows:
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install build prerequisites
         shell: pwsh
         run: |
@@ -75,7 +75,7 @@ jobs:
           cpack -C Release
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           Pop-Location
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         with:
           name: odbc-windows-x86_64
           path: iotdb-client/odbc/target/build/iotdb-odbc-*.zip*
@@ -87,7 +87,7 @@ jobs:
       matrix:
         image: ['almalinux:8', 'ubuntu:22.04', 'ubuntu:24.04']
     steps:
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           name: odbc-linux-x86_64-glibc2.28
           path: artifacts
