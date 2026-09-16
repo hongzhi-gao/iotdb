@@ -1,0 +1,144 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+cmake_minimum_required(VERSION 3.20)
+cmake_policy(SET CMP0091 NEW)
+project(apache_iotdb_odbc VERSION 1.0.0 LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR
+   NOT CMAKE_SYSTEM_NAME MATCHES "^(Windows|Linux)$" OR
+   NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$" OR
+   CMAKE_GENERATOR_PLATFORM MATCHES "[Aa][Rr][Mm]")
+    message(FATAL_ERROR "ODBC release builds support Windows/Linux x64 only")
+endif()
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+if(MSVC)
+    # OpenSSL and Thrift are configured once per build directory. Avoid linking
+    # a Debug driver against dependencies built with the Release CRT.
+    set(CMAKE_CONFIGURATION_TYPES "${CMAKE_BUILD_TYPE}" CACHE STRING "Configurations" FORCE)
+endif()
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+option(ODBC_BUILD_TESTS "Build ODBC tests" ON)
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/../pom.xml" _version_line REGEX "<version>")
+list(GET _version_line 0 _version_line)
+string(REGEX REPLACE ".*<version>([^<]+)</version>.*" "\\1" _repository_version "${_version_line}")
+set(ODBC_PACKAGE_VERSION "${_repository_version}" CACHE STRING "Package version")
+set(ODBC_PACKAGE_CLASSIFIER "${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}" CACHE STRING "Release platform")
+
+# Scope SDK configuration to this build; its standalone defaults remain unchanged.
+set(IOTDB_SESSION_STATIC ON CACHE BOOL "" FORCE)
+set(IOTDB_SESSION_INSTALL OFF CACHE BOOL "" FORCE)
+set(IOTDB_STATIC_CRT ON CACHE BOOL "" FORCE)
+set(IOTDB_OPENSSL_STATIC ON CACHE BOOL "" FORCE)
+set(IOTDB_OPENSSL_FROM_SOURCE ON CACHE BOOL "" FORCE)
+set(WITH_SSL ON CACHE BOOL "" FORCE)
+set(IOTDB_SESSION_VERSION "${ODBC_PACKAGE_VERSION}" CACHE STRING "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+add_subdirectory(../client-cpp client-cpp EXCLUDE_FROM_ALL)
+
+# Keep the original vendored curl snapshot. HTTP is the existing REST transport;
+# Session TLS is implemented by the shared C++ client, not curl.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(BUILD_LIBCURL_DOCS OFF CACHE BOOL "" FORCE)
+set(ENABLE_MANUAL OFF CACHE BOOL "" FORCE)
+set(CURL_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
+set(HTTP_ONLY ON CACHE BOOL "" FORCE)
+set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+set(CURL_USE_SCHANNEL OFF CACHE BOOL "" FORCE)
+set(CURL_ENABLE_SSL OFF CACHE BOOL "" FORCE)
+set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
+set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
+set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
+set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
+set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
+set(USE_NGHTTP2 OFF CACHE BOOL "" FORCE)
+set(USE_LIBIDN2 OFF CACHE BOOL "" FORCE)
+set(ENABLE_LDAP OFF CACHE BOOL "" FORCE)
+set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
+set(CURL_STATIC_CRT ${MSVC} CACHE BOOL "" FORCE)
+add_subdirectory(deps/curl-src curl EXCLUDE_FROM_ALL)
+
+set(DRIVER_VERSION "${ODBC_PACKAGE_VERSION}")
+set(DEBUG_LOG_ENABLED TRUE)
+set(DEBUG_LOG_OUTPUT_PATH "apache_iotdb_odbc.log")
+configure_file(src/DriverConfig.h.in generated/DriverConfig.h @ONLY)
+file(GLOB ODBC_SOURCES CONFIGURE_DEPENDS src/*.cpp)
+list(REMOVE_ITEM ODBC_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/install_driver.cpp")
+add_library(odbc_objects OBJECT ${ODBC_SOURCES})
+target_include_directories(odbc_objects PUBLIC src "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    deps/json-src/single_include)
+target_link_libraries(odbc_objects PUBLIC iotdb_session CURL::libcurl)
+target_compile_definitions(odbc_objects PUBLIC CURL_STATICLIB)
+add_library(apache_iotdb_odbc SHARED $<TARGET_OBJECTS:odbc_objects>)
+target_link_libraries(apache_iotdb_odbc PRIVATE odbc_objects)
+if(WIN32)
+    enable_language(RC)
+    target_compile_definitions(odbc_objects PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_compile_options(odbc_objects PUBLIC /utf-8)
+    target_sources(odbc_objects PRIVATE src/setup/setup_dialog.cpp)
+    target_sources(apache_iotdb_odbc PRIVATE src/setup/setup.rc driver.def)
+    target_link_libraries(odbc_objects PUBLIC odbccp32 legacy_stdio_definitions)
+    add_executable(install_driver src/install_driver.cpp)
+    target_compile_definitions(install_driver PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(install_driver PRIVATE odbccp32 legacy_stdio_definitions)
+    install(TARGETS install_driver RUNTIME DESTINATION bin)
+    install(FILES install.bat uninstall.bat DESTINATION .)
+else()
+    find_path(ODBC_INCLUDE_DIR sql.h REQUIRED)
+    find_library(ODBCINST_LIBRARY odbcinst REQUIRED)
+    target_include_directories(odbc_objects PUBLIC "${ODBC_INCLUDE_DIR}")
+    target_link_libraries(odbc_objects PUBLIC "${ODBCINST_LIBRARY}")
+    target_link_options(apache_iotdb_odbc PRIVATE -static-libstdc++ -static-libgcc
+        "LINKER:--version-script=${CMAKE_CURRENT_SOURCE_DIR}/exports.map"
+        "LINKER:--exclude-libs,ALL" "LINKER:-z,defs" "LINKER:-Bsymbolic-functions")
+    set_property(TARGET apache_iotdb_odbc APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/exports.map")
+endif()
+install(TARGETS apache_iotdb_odbc RUNTIME DESTINATION bin LIBRARY DESTINATION lib)
+install(FILES README.md SOURCE.md VALIDATION.md DESTINATION .)
+install(DIRECTORY conf/ DESTINATION conf)
+install(FILES deps/curl-src/COPYING DESTINATION licenses RENAME curl.txt)
+install(FILES deps/json-src/LICENSE.MIT DESTINATION licenses RENAME json.txt)
+install(DIRECTORY ../client-cpp/src/assembly/package-metadata/third_party/ DESTINATION licenses/sdk)
+install(FILES ../../LICENSE ../../NOTICE DESTINATION .)
+install(DIRECTORY licenses/ DESTINATION licenses)
+execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE ODBC_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/BUILD-INFO.txt"
+    "version=${ODBC_PACKAGE_VERSION}\ncommit=${ODBC_COMMIT}\nsource.odbc=21db94e\n"
+    "platform=${ODBC_PACKAGE_CLASSIFIER}\ncompiler=${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}\n"
+    "thrift=${THRIFT_VERSION}\nopenssl=${OPENSSL_FALLBACK_VERSION}\n"
+    "session.linkage=static\nopenssl.linkage=static\ncurl.linkage=static\n")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/BUILD-INFO.txt" DESTINATION .)
+
+if(ODBC_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(test)
+endif()
+
+set(CPACK_GENERATOR ZIP)
+set(CPACK_PACKAGE_FILE_NAME "iotdb-odbc-${ODBC_PACKAGE_VERSION}-${ODBC_PACKAGE_CLASSIFIER}")
+set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
+set(CPACK_PACKAGE_CHECKSUM SHA512)
+include(CPack)

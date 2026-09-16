@@ -768,6 +768,9 @@
                             <exclude>**/package-metadata/third_party/licenses/**</exclude>
                             <!-- generated certificates and private keys used only by C++ TLS tests -->
                             <exclude>**/client-cpp/test/fixtures/**</exclude>
+                            <!-- Imported third-party sources retain their original licenses. -->
+                            <exclude>iotdb-client/odbc/deps/**</exclude>
+                            <exclude>iotdb-client/odbc/licenses/**</exclude>
                             <exclude>test/fixtures/**/*.crt</exclude>
                             <exclude>test/fixtures/**/*.key</exclude>
                             <!-- bundled third-party NOTICE / license texts for the AINode package -->

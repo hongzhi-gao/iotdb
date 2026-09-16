@@ -64,7 +64,7 @@ jobs:
           cpp=false
           while IFS= read -r file; do
             case "$file" in
-              iotdb-client/client-cpp/*|iotdb-client/pom.xml|iotdb-protocol/thrift-datanode/src/main/thrift/client.thrift|iotdb-protocol/thrift-commons/src/main/thrift/common.thrift|.github/workflows/client-cpp-package.yml|.github/scripts/package-client-cpp-*.sh)
+              iotdb-client/client-cpp/*|iotdb-client/pom.xml|iotdb-protocol/thrift-datanode/src/main/thrift/client.thrift|iotdb-protocol/thrift-commons/src/main/thrift/common.thrift|.github/workflows/client-cpp-package.yml|.github/scripts/package-client-cpp-*.sh|.github/scripts/native-linux-env.sh)
                 cpp=true
                 break
                 ;;
@@ -189,12 +189,13 @@ jobs:
         run: |
           set -euxo pipefail
           chmod +x .github/scripts/package-client-cpp-manylinux228.sh
+          source .github/scripts/native-linux-env.sh
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
             -v "${HOME}/.m2:/root/.m2" \
             -w /workspace \
             -e GITHUB_WORKSPACE=/workspace \
-            quay.io/pypa/manylinux_2_28_x86_64 \
+            "${NATIVE_LINUX_IMAGE}" \
             bash .github/scripts/package-client-cpp-manylinux228.sh
       - name: Restore workspace ownership after container build
         if: always()
@@ -247,12 +248,13 @@ jobs:
         run: |
           set -euxo pipefail
           chmod +x .github/scripts/package-client-cpp-manylinux228.sh
+          source .github/scripts/native-linux-env.sh
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
             -v "${HOME}/.m2:/root/.m2" \
             -w /workspace \
             -e GITHUB_WORKSPACE=/workspace \
-            quay.io/pypa/manylinux_2_28_aarch64 \
+            "${NATIVE_LINUX_IMAGE}" \
             bash .github/scripts/package-client-cpp-manylinux228.sh
       - name: Restore workspace ownership after container build
         if: always()
