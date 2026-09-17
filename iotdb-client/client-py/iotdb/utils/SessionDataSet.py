@@ -112,6 +112,28 @@ class SessionDataSet(object):
             return None
         return self._construct_row_record()
 
+    def next_tuple(self):
+        row_record = self.next()
+        if row_record is None:
+            return None
+
+        values = []
+        if not self.iotdb_rpc_data_set.ignore_timestamp:
+            values.append(int(row_record.get_timestamp()))
+        for field in row_record.get_fields():
+            value = field.get_object_value(field.get_data_type())
+            if field.get_data_type() == TSDataType.TIMESTAMP and hasattr(
+                value, "to_pydatetime"
+            ):
+                # datetime has only microsecond precision. Keep the datetime
+                # subclass Timestamp when conversion would discard nanoseconds.
+                if not value.nanosecond:
+                    value = value.to_pydatetime()
+            elif hasattr(value, "item"):
+                value = value.item()
+            values.append(value)
+        return tuple(values)
+
     def _construct_row_record(self):
         row = self.iotdb_rpc_data_set._pop_row()
         if row is None:
