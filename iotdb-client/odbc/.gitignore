@@ -14,12 +14,10 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-# Root rules ignore *.txt, *.cmake and lib/; these are source inputs here.
+# Root rules ignore *.txt and *.cmake; these are source inputs here.
 !/CMakeLists.txt
 !/cmake/*.cmake
 !/test/CMakeLists.txt
-!/deps/
-!/deps/**
 !/licenses/*.txt
 !/examples/python-example/requirements.txt
 /target/

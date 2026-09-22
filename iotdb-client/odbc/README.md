@@ -29,8 +29,10 @@ The OS libraries and ODBC manager/installer remain system prerequisites.
 
 Use CMake 3.20+, a C++14 compiler and the C++ SDK build prerequisites. Windows
 requires Visual Studio 2022 x64, Strawberry Perl and winflexbison3. Linux requires
-unixODBC development headers. Dependency archives use the C++ SDK cache under
-`../client-cpp/third-party`; `-DIOTDB_OFFLINE=ON` requires a populated cache.
+unixODBC development headers. CMake downloads curl 8.4.0 and nlohmann/json 3.11.3
+into the build directory and verifies their SHA-256 checksums. The C++ SDK keeps
+its dependency archives under `../client-cpp/third-party`; `-DIOTDB_OFFLINE=ON`
+requires that SDK cache to be populated.
 
 ```sh
 cmake -S iotdb-client/odbc -B iotdb-client/odbc/target/build -DCMAKE_BUILD_TYPE=Release
@@ -57,6 +59,31 @@ rejects unexpected shared-library dependencies or GLIBC requirements above 2.28.
 A build on a newer host is a development build, not evidence of glibc 2.28 compatibility.
 Release scope is Linux x86_64 and Windows x64 (Windows 10/11, Server 2016+).
 Packages and SHA-512 checksums are written into the CMake build directory.
+The dependency URLs, versions and checksums are exposed as `ODBC_CURL_*` and
+`ODBC_JSON_*` CMake cache variables for controlled mirrors or version updates.
+File logging is excluded from release builds by default; enable it explicitly
+with `-DODBC_ENABLE_LOGGING=ON` when troubleshooting.
+
+## ODBC conformance
+
+The implementation reference is Microsoft's official
+[ODBC Programmer's Reference](https://learn.microsoft.com/en-us/sql/odbc/reference/odbc-programmer-s-reference),
+especially the [Core Interface Conformance](https://learn.microsoft.com/en-us/sql/odbc/reference/develop-app/core-interface-conformance)
+function requirements, API reference, state-transition
+tables and diagnostic-record rules linked from that page. The driver uses the
+ODBC 3.8 ABI and targets core interface conformance.
+
+Capability discovery is treated as a compatibility contract: `SQLGetFunctions`
+reports only callable implementations, and `SQLGetInfo` reports only behavior
+provided by the driver and IoTDB. Unsupported optional behavior returns a
+standard SQLSTATE instead of being silently accepted. Core behavior includes
+explicit and implicit descriptors, input parameter arrays (including
+data-at-execution parameters),
+rowset fetching, and the required catalog result schemas. The current intentional
+optional limits are forward-only, read-only cursors; no true transactions, output
+parameters, stored procedures, asynchronous execution or bookmarks. Applications
+must use `SQLGetFunctions` and `SQLGetInfo` rather than infer optional support from
+exported symbols.
 
 ## Install
 
@@ -99,8 +126,8 @@ TLS options is rejected: HTTPS is outside this migration's scope.
 
 CTest covers configuration, type conversions, diagnostics and loading through the
 system ODBC manager. The manager test deliberately rejects an invalid TLS/REST
-combination without contacting a server. Windows tests use a temporary,
-process-local registry sandbox and do not install a system ODBC driver.
+combination without contacting a server. Windows tests use a temporary user DSN
+and do not install or modify a machine-wide ODBC driver registration.
 To test a running server:
 
 ```sh
@@ -114,4 +141,3 @@ negative connection tests. For plain/TLS/mTLS server phases, run
 The runner requires Java 17+, `keytool`, Python 3 and (on Linux) `lsof` or `netstat`.
 Set `IOTDB_TEST_PASSWORD` to the test server password. It copies the supplied
 distribution, refuses occupied test ports and removes the temporary copy afterward.
-See `VALIDATION.md` for checks actually performed during migration.

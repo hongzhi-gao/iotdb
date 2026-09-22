@@ -176,7 +176,7 @@ bool ODBCSessionResultSet::loadDataInternal() {
         int dataIteratorIndex = col + 1;
         ODBCField& field = rowData[col];
 
-        // TODO: Currently have no difference in handling table model and tree model. Need to verify if a difference exists
+        // Session result conversion is shared by table and tree model responses.
         // in the session response between the two models.
         logMessage(stmt->getConnection(),
                    "ODBCSessionResultSet::loadDataInternal: Loading column " + std::to_string(col),

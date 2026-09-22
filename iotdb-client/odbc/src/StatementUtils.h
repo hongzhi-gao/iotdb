@@ -16,10 +16,13 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-#pragma once
+#ifndef STATEMENT_UTILS_H
+#define STATEMENT_UTILS_H
 
-// Driver version information
-#define DRIVER_VERSION "@DRIVER_VERSION@"
+#include <string>
+#include <vector>
 
-#define DEBUG_LOG_OUTPUT_PATH "@DEBUG_LOG_OUTPUT_PATH@"
-#cmakedefine01 ODBC_ENABLE_LOGGING
+bool IsQueryStatement(const std::string& sql);
+std::vector<size_t> ParameterMarkerPositions(const std::string& sql);
+
+#endif // STATEMENT_UTILS_H

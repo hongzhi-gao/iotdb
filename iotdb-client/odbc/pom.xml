@@ -38,15 +38,6 @@
     <build>
         <plugins>
             <plugin>
-                <groupId>org.apache.rat</groupId>
-                <artifactId>apache-rat-plugin</artifactId>
-                <configuration>
-                    <excludes combine.children="append">
-                        <exclude>deps/**</exclude>
-                    </excludes>
-                </configuration>
-            </plugin>
-            <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
                 <executions>
@@ -108,4 +99,45 @@
             </plugin>
         </plugins>
     </build>
+    <profiles>
+        <!-- Keep ODBC C++ sources under the same formatter policy as client-cpp. -->
+        <profile>
+            <id>spotless-cpp</id>
+            <activation>
+                <jdk>[17,)</jdk>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>com.diffplug.spotless</groupId>
+                        <artifactId>spotless-maven-plugin</artifactId>
+                        <version>2.44.5</version>
+                        <configuration>
+                            <cpp>
+                                <includes>
+                                    <include>src/**/*.h</include>
+                                    <include>src/**/*.hpp</include>
+                                    <include>src/**/*.c</include>
+                                    <include>src/**/*.cc</include>
+                                    <include>src/**/*.cpp</include>
+                                    <include>test/**/*.h</include>
+                                    <include>test/**/*.hpp</include>
+                                    <include>test/**/*.c</include>
+                                    <include>test/**/*.cc</include>
+                                    <include>test/**/*.cpp</include>
+                                    <include>examples/**/*.c</include>
+                                    <include>examples/**/*.cc</include>
+                                    <include>examples/**/*.cpp</include>
+                                </includes>
+                                <clangFormat>
+                                    <version>${clang.format.version}</version>
+                                    <style>file</style>
+                                </clangFormat>
+                            </cpp>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

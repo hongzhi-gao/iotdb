@@ -24,6 +24,7 @@
 #include "driver.h"
 #include "DiagnosticManager.h"
 #include "ODBCResultSet.h"
+#include "StatementUtils.h"
 
 // IoTDB Session API includes
 #include <TableSession.h>
@@ -34,28 +35,6 @@
 
 // Forward declarations for functions defined in driver.cpp
 SQLRETURN IoTDB_ExecDirect_Session(StatementHandle* stmt, const std::string& statementText);
-
-// Determine if SQL statement is a query statement
-bool IsQueryStatement(const std::string& sql) {
-  size_t start = sql.find_first_not_of(" \t\n\r");
-  std::string trimmedSql = (start == std::string::npos) ? "" : sql.substr(start);
-
-  std::transform(trimmedSql.begin(), trimmedSql.end(), trimmedSql.begin(), ::tolower);
-
-  if (trimmedSql.find("select") == 0) {
-    return true;
-  } else if (trimmedSql.find("with") == 0) {
-    return true;
-  } else if (trimmedSql.find("show") == 0) {
-    return true;
-  } else if (trimmedSql.find("describe") == 0 || trimmedSql.find("desc") == 0) {
-    return true;
-  } else if (trimmedSql.find("list") == 0) {
-    return true;
-  } else {
-    return false;
-  }
-}
 
 // Test Session API connection and return connection result
 SQLRETURN IoTDB_DriverConnect_Session(ConnectionHandle* cnct) {
@@ -150,14 +129,10 @@ SQLRETURN IoTDB_ExecDirect_Session(StatementHandle* stmt, const std::string& sta
   ConnectionHandle* cnct = stmt->getConnection();
   logMessage(cnct, "IoTDB_ExecDirect_Session: Entering", LOG_LEVEL_TRACE);
 
-  // TODO: Do something with the parameter ...
   bool isQuery = IsQueryStatement(statementText);
-  // Log statement details at DEBUG level
+  // Do not log SQL text: statements can contain credentials or user data.
   if (isLogLevelEnabled(cnct, LOG_LEVEL_DEBUG)) {
-    std::string logMessageText = "IoTDB_ExecDirect_Session: Statement = " + statementText;
-    logMessage(cnct, logMessageText, LOG_LEVEL_DEBUG);
-
-    logMessageText =
+    const std::string logMessageText =
         "IoTDB_ExecDirect_Session: Statement type = " + std::string(isQuery ? "query" : "nonQuery");
     logMessage(cnct, logMessageText, LOG_LEVEL_DEBUG);
   }

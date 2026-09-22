@@ -37,6 +37,7 @@
 #include "rest_api_client.h"
 #include "session_api_client.h"
 #include "StatementHandle.h"
+#include "StatementUtils.h"
 #include "ConnectionHandle.h"
 #include "ConnectionString.h"
 #include "EnvironmentHandle.h"
@@ -65,6 +66,8 @@ SQLRETURN setString(const std::string& value, SQLPOINTER stringBuffer, SQLSMALLI
       std::memcpy(stringBuffer, value.data(), maxCopy);
     }
     static_cast<char*>(stringBuffer)[maxCopy] = '\0';
+    if (maxCopy < value.size())
+      return SQL_SUCCESS_WITH_INFO;
   }
   return SQL_SUCCESS;
 }
@@ -78,23 +81,22 @@ SQLRETURN setString(const std::string& value, SQLPOINTER stringBuffer, SQLSMALLI
  */
 SQLRETURN setString(const char* value, SQLPOINTER stringBuffer, SQLSMALLINT bufferLength,
                     SQLSMALLINT* stringLength) {
-  if (!value) {
+  if (!value)
     value = "";
-    return SQL_SUCCESS;
+
+  const size_t valueLen = std::strlen(value);
+  if (stringLength) {
+    *stringLength = static_cast<SQLSMALLINT>(
+        std::min(valueLen, static_cast<size_t>(std::numeric_limits<SQLSMALLINT>::max())));
   }
 
   if (stringBuffer && bufferLength > 0) {
-    size_t valueLen = std::strlen(value);
     size_t maxCopy = std::min(valueLen, static_cast<size_t>(bufferLength - 1));
 
-    std::strncpy(static_cast<char*>(stringBuffer), value, maxCopy);
+    std::memcpy(stringBuffer, value, maxCopy);
     static_cast<char*>(stringBuffer)[maxCopy] = '\0';
-
-    if (stringLength) {
-      *stringLength = static_cast<SQLSMALLINT>(maxCopy);
-    }
-  } else if (stringLength) {
-    *stringLength = static_cast<SQLSMALLINT>(std::strlen(value));
+    if (maxCopy < valueLen)
+      return SQL_SUCCESS_WITH_INFO;
   }
   return SQL_SUCCESS;
 }
@@ -130,77 +132,75 @@ SQLRETURN SQL_API SQLAllocHandle(const SQLSMALLINT handleType, const SQLHANDLE p
                                  SQLHANDLE* outputHandle) {
   logMessage("SQLAllocHandle: Entering.");
 
+  if (!outputHandle) {
+    logMessage("SQLAllocHandle: outputHandle is null");
+    return SQL_ERROR;
+  }
+  *outputHandle = nullptr;
+
   std::stringstream logStream;
   logStream << "Parameters: "
             << "handleType = " << handleType << ", parentHandle = " << handleToString(parentHandle);
   logMessage(logStream.str());
 
-  bool hasDiagnosticInfo = false;
+  try {
+    switch (handleType) {
+    case SQL_HANDLE_ENV:
+      if (parentHandle != SQL_NULL_HANDLE)
+        return SQL_INVALID_HANDLE;
+      *outputHandle = new EnvironmentHandle();
+      break;
 
-  switch (handleType) {
-  case SQL_HANDLE_ENV: {
-    auto* env = new EnvironmentHandle();
-    *outputHandle = env;
-    logMessage("SQLAllocHandle: Allocated SQL_HANDLE_ENV");
-  } break;
-
-  case SQL_HANDLE_DBC: {
-    auto* env = static_cast<EnvironmentHandle*>(parentHandle);
-    if (env == nullptr) {
-      logMessage("SQLAllocHandle: Invalid environment handle!");
-      return SQL_INVALID_HANDLE;
+    case SQL_HANDLE_DBC: {
+      auto* env = static_cast<EnvironmentHandle*>(parentHandle);
+      if (!env || env->getHandleType() != SQL_HANDLE_ENV || env->isHandleFreed())
+        return SQL_INVALID_HANDLE;
+      *outputHandle = new ConnectionHandle(env);
+      break;
     }
 
-    auto* cnct = new ConnectionHandle(env);
-    *outputHandle = cnct;
-    logMessage("Allocated SQL_HANDLE_DBC");
-  } break;
-
-  case SQL_HANDLE_STMT: {
-    auto* cnct = static_cast<ConnectionHandle*>(parentHandle);
-    if (cnct == nullptr) {
-      logMessage("SQLAllocHandle: Invalid connection handle!");
-      return SQL_INVALID_HANDLE;
+    case SQL_HANDLE_STMT: {
+      auto* cnct = static_cast<ConnectionHandle*>(parentHandle);
+      if (!cnct || cnct->getHandleType() != SQL_HANDLE_DBC || cnct->isHandleFreed())
+        return SQL_INVALID_HANDLE;
+      auto* stmt = new StatementHandle(cnct);
+      *outputHandle = stmt;
+      break;
     }
-    auto* stmt = new StatementHandle(cnct);
-    stmt->appRowDesc = reinterpret_cast<SQLHANDLE>(stmt);
-    stmt->impRowDesc = reinterpret_cast<SQLHANDLE>(stmt);
-    *outputHandle = stmt;
-    logMessage("Allocated SQL_HANDLE_STMT");
-  } break;
 
-  default:
-    *outputHandle = nullptr;
-    logMessage("Unhandled handle type\n");
-    if (parentHandle != nullptr) {
-      switch (handleType) {
-      case SQL_HANDLE_DBC:
-        static_cast<EnvironmentHandle*>(parentHandle)
-            ->addDiagnostic("HY092", "Invalid handle type: handleType is SQL_HANDLE_DBC");
-        break;
-      case SQL_HANDLE_STMT:
-        static_cast<ConnectionHandle*>(parentHandle)
-            ->addDiagnostic("HY092", "Invalid handle type: handleType is SQL_HANDLE_STMT");
-        break;
-      }
-      hasDiagnosticInfo = true;
+    case SQL_HANDLE_DESC: {
+      auto* cnct = static_cast<ConnectionHandle*>(parentHandle);
+      if (!cnct || cnct->getHandleType() != SQL_HANDLE_DBC || cnct->isHandleFreed())
+        return SQL_INVALID_HANDLE;
+      *outputHandle = new DescriptorHandle(cnct, DescriptorRole::EXPLICIT);
+      break;
     }
+
+    default:
+      logMessage("SQLAllocHandle: unsupported handle type");
+      return SQL_ERROR;
+    }
+  } catch (const std::bad_alloc&) {
+    if (parentHandle)
+      static_cast<ODBCHandle*>(parentHandle)->addDiagnostic("HY001", "Memory allocation failed");
+    return SQL_ERROR;
+  } catch (const std::exception& error) {
+    if (parentHandle)
+      static_cast<ODBCHandle*>(parentHandle)->addDiagnostic("HY000", error.what());
     return SQL_ERROR;
   }
+
   logMessage("Allocated handle: " + handleToString(*outputHandle));
-  if (hasDiagnosticInfo) {
-    logMessage("SQLAllocHandle: Exit successfully with info\n");
-    return SQL_SUCCESS_WITH_INFO;
-  } else {
-    logMessage("SQLAllocHandle: Exit successfully\n");
-    return SQL_SUCCESS;
-  }
+  return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLAllocStmt(SQLHDBC connectionHandle, SQLHSTMT* statementHandle) {
   logMessage("Entering SQLAllocStmt");
-  if (!connectionHandle || !statementHandle) {
-    logMessage("Missing connectionHandle or statementHandle\n");
+  if (!connectionHandle)
+    return SQL_INVALID_HANDLE;
+  if (!statementHandle) {
+    static_cast<ConnectionHandle*>(connectionHandle)
+        ->addDiagnostic("HY009", "Invalid use of null pointer");
     return SQL_ERROR;
   }
 
@@ -223,8 +223,23 @@ SQLRETURN SQL_API SQLBindCol(SQLHSTMT statementHandle, SQLUSMALLINT columnNumber
                              SQLSMALLINT targetType, SQLPOINTER targetValuePtr, SQLLEN bufferLength,
                              SQLLEN* strLen_or_IndPtr) {
   const auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt->getConnection();
+  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
   logMessage(cnct, "SQLBindCol: Entering", LOG_LEVEL_TRACE);
+  if (!stmt)
+    return SQL_INVALID_HANDLE;
+  stmt->clearDiagnostics();
+  if (columnNumber == 0) {
+    stmt->addDiagnostic("HYC00", "Bookmarks are not supported");
+    return SQL_ERROR;
+  }
+  if (columnNumber > static_cast<SQLUSMALLINT>(std::numeric_limits<SQLSMALLINT>::max())) {
+    stmt->addDiagnostic("07009", "Invalid descriptor index");
+    return SQL_ERROR;
+  }
+  if (bufferLength < 0) {
+    stmt->addDiagnostic("HY090", "Invalid string or buffer length");
+    return SQL_ERROR;
+  }
   if (isLogLevelEnabled(cnct, LOG_LEVEL_TRACE)) {
     std::stringstream logStream;
     logStream << "Parameters: "
@@ -236,9 +251,46 @@ SQLRETURN SQL_API SQLBindCol(SQLHSTMT statementHandle, SQLUSMALLINT columnNumber
     logMessage(stmt->getConnection(), logStream.str(), LOG_LEVEL_TRACE);
   }
 
-  // Delegate to ODBCResultSet's bindColumn method
-  SQLRETURN result = stmt->resultSetPtr->bindColumn(columnNumber, targetType, targetValuePtr,
-                                                    bufferLength, strLen_or_IndPtr);
+  if (stmt->columnBindings.size() <= columnNumber)
+    stmt->columnBindings.resize(columnNumber + 1);
+
+  BindColInfo& binding = stmt->columnBindings[columnNumber];
+  if (!targetValuePtr && !strLen_or_IndPtr) {
+    binding = BindColInfo();
+    auto* ard = static_cast<DescriptorHandle*>(stmt->appRowDesc);
+    if (DescriptorRecord* record = ard->findRecord(columnNumber)) {
+      record->dataPtr = nullptr;
+      record->octetLengthPtr = nullptr;
+      record->indicatorPtr = nullptr;
+    }
+    if (stmt->resultSetPtr)
+      stmt->resultSetPtr->bindColInfo = stmt->columnBindings;
+    return SQL_SUCCESS;
+  }
+
+  SQLRETURN result = SQL_SUCCESS;
+  if (stmt->resultSetPtr) {
+    result = stmt->resultSetPtr->bindColumn(columnNumber, targetType, targetValuePtr, bufferLength,
+                                            strLen_or_IndPtr);
+    if (!SQL_SUCCEEDED(result))
+      return result;
+    stmt->columnBindings = stmt->resultSetPtr->bindColInfo;
+  } else {
+    binding.targetType = targetType;
+    binding.targetValuePtr = targetValuePtr;
+    binding.bufferLength = bufferLength;
+    binding.strLen_or_IndPtr = strLen_or_IndPtr;
+    binding.isBound = true;
+  }
+
+  auto* ard = static_cast<DescriptorHandle*>(stmt->appRowDesc);
+  DescriptorRecord& record = ard->record(static_cast<SQLSMALLINT>(columnNumber));
+  ard->count = std::max(ard->count, static_cast<SQLSMALLINT>(columnNumber));
+  record.setConciseType(targetType);
+  record.dataPtr = targetValuePtr;
+  record.octetLength = bufferLength;
+  record.octetLengthPtr = strLen_or_IndPtr;
+  record.indicatorPtr = strLen_or_IndPtr;
 
   logMessage(stmt->getConnection(), "SQLBindCol: Exiting", LOG_LEVEL_TRACE);
   return result;
@@ -248,17 +300,66 @@ SQLRETURN SQL_API SQLBindParam(SQLHSTMT statementHandle, SQLUSMALLINT parameterN
                                SQLSMALLINT valueType, SQLSMALLINT parameterType,
                                SQLULEN lengthPrecision, SQLSMALLINT parameterScale,
                                SQLPOINTER parameterValue, SQLLEN* strLen_or_Ind) {
-  if (!statementHandle) {
-    logMessage(nullptr, "SQLBindParam: Invalid statement handle", LOG_LEVEL_ERROR);
+  return SQLBindParameter(statementHandle, parameterNumber, SQL_PARAM_INPUT, valueType,
+                          parameterType, lengthPrecision, parameterScale, parameterValue,
+                          static_cast<SQLLEN>(lengthPrecision), strLen_or_Ind);
+}
+
+SQLRETURN SQL_API SQLBindParameter(SQLHSTMT statementHandle, SQLUSMALLINT parameterNumber,
+                                   SQLSMALLINT inputOutputType, SQLSMALLINT valueType,
+                                   SQLSMALLINT parameterType, SQLULEN columnSize,
+                                   SQLSMALLINT decimalDigits, SQLPOINTER parameterValuePtr,
+                                   SQLLEN bufferLength, SQLLEN* strLen_or_IndPtr) {
+  if (!statementHandle)
     return SQL_INVALID_HANDLE;
+  auto* stmt = static_cast<StatementHandle*>(statementHandle);
+  stmt->clearDiagnostics();
+  if (parameterNumber == 0 ||
+      parameterNumber > static_cast<SQLUSMALLINT>(std::numeric_limits<SQLSMALLINT>::max())) {
+    stmt->addDiagnostic("07009", "Invalid parameter number");
+    return SQL_ERROR;
   }
-  auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLBindParam is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLBindParam Function not implemented");
+  if (inputOutputType != SQL_PARAM_INPUT) {
+    stmt->addDiagnostic("HYC00", "Only input parameters are supported");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  if (bufferLength < 0) {
+    stmt->addDiagnostic("HY090", "Invalid string or buffer length");
+    return SQL_ERROR;
+  }
+  if (stmt->parameterBindings.size() < parameterNumber)
+    stmt->parameterBindings.resize(parameterNumber);
+  ParameterBinding& binding = stmt->parameterBindings[parameterNumber - 1];
+  binding.inputOutputType = inputOutputType;
+  binding.valueType = valueType;
+  binding.parameterType = parameterType;
+  binding.columnSize = columnSize;
+  binding.decimalDigits = decimalDigits;
+  binding.valuePtr = parameterValuePtr;
+  binding.bufferLength = bufferLength;
+  binding.indicatorPtr = strLen_or_IndPtr;
+  binding.streamedData.clear();
+  binding.streamedNull.clear();
+  binding.bound = true;
+
+  auto* apd = static_cast<DescriptorHandle*>(stmt->appParamDesc);
+  DescriptorRecord& appRecord = apd->record(static_cast<SQLSMALLINT>(parameterNumber));
+  apd->count = std::max(apd->count, static_cast<SQLSMALLINT>(parameterNumber));
+  appRecord.setConciseType(valueType);
+  appRecord.dataPtr = parameterValuePtr;
+  appRecord.octetLength = bufferLength;
+  appRecord.octetLengthPtr = strLen_or_IndPtr;
+  appRecord.indicatorPtr = strLen_or_IndPtr;
+  auto* ipd = static_cast<DescriptorHandle*>(stmt->impParamDesc);
+  DescriptorRecord& impRecord = ipd->record(static_cast<SQLSMALLINT>(parameterNumber));
+  ipd->count = std::max(ipd->count, static_cast<SQLSMALLINT>(parameterNumber));
+  impRecord.setConciseType(parameterType);
+  impRecord.length = columnSize;
+  impRecord.precision = static_cast<SQLSMALLINT>(
+      std::min<SQLULEN>(columnSize, std::numeric_limits<SQLSMALLINT>::max()));
+  impRecord.scale = decimalDigits;
+  impRecord.parameterType = inputOutputType;
+  return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLCancel(SQLHSTMT statementHandle) {
@@ -267,12 +368,19 @@ SQLRETURN SQL_API SQLCancel(SQLHSTMT statementHandle) {
     return SQL_INVALID_HANDLE;
   }
   auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLCancel is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLCancel Function not implemented");
+  stmt->clearDiagnostics();
+  stmt->needsParameterData = false;
+  stmt->nextDataSet = 0;
+  stmt->activeDataSet = std::numeric_limits<SQLULEN>::max();
+  stmt->nextDataParameter = 0;
+  stmt->activeDataParameter = std::numeric_limits<size_t>::max();
+  for (auto& binding : stmt->parameterBindings) {
+    binding.streamedData.clear();
+    binding.streamedNull.clear();
   }
-  return SQL_ERROR;
+  // Other operations are synchronous. Once control returns to the application
+  // there is no active operation to cancel.
+  return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLCancelHandle(SQLSMALLINT handleType, SQLHANDLE inputHandle) {
@@ -280,19 +388,15 @@ SQLRETURN SQL_API SQLCancelHandle(SQLSMALLINT handleType, SQLHANDLE inputHandle)
     logMessage(nullptr, "SQLCancelHandle: Invalid handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
-  logMessage("SQLCancelHandle is not implemented");
-  if (handleType == SQL_HANDLE_STMT) {
-    const auto stmt = static_cast<StatementHandle*>(inputHandle);
-    stmt->addDiagnostic("IM001", "SQLCancelHandle Function not implemented");
-    return SQL_ERROR;
-  } else if (handleType == SQL_HANDLE_DBC) {
-    const auto cnct = static_cast<ConnectionHandle*>(inputHandle);
-    cnct->addDiagnostic("IM001", "SQLCancelHandle Function not implemented");
-    return SQL_ERROR;
-  } else {
-    logMessage("SQLCancelHandle: Invalid handle type");
-    return SQL_ERROR;
+  if (handleType == SQL_HANDLE_STMT)
+    return SQLCancel(static_cast<SQLHSTMT>(inputHandle));
+  if (handleType == SQL_HANDLE_DBC) {
+    static_cast<ConnectionHandle*>(inputHandle)->clearDiagnostics();
+    // All connection operations are synchronous, so there is no pending work.
+    return SQL_SUCCESS;
   }
+  logMessage("SQLCancelHandle: Invalid handle type");
+  return SQL_INVALID_HANDLE;
 }
 
 SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT statementHandle) {
@@ -301,12 +405,20 @@ SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT statementHandle) {
     return SQL_INVALID_HANDLE;
   }
   auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLCloseCursor is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLCloseCursor Function not implemented");
+  ConnectionHandle* cnct = stmt->getConnection();
+  stmt->clearDiagnostics();
+  if (!stmt->resultSetPtr) {
+    stmt->addDiagnostic("24000", "Invalid cursor state");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  stmt->ClearResultSet();
+  stmt->curRow = -1;
+  stmt->rowsReturned = 0;
+  stmt->lastGetDataRow = -1;
+  stmt->lastGetDataCol = 0;
+  stmt->getDataOffsets.clear();
+  logMessage(cnct, "SQLCloseCursor: Cursor closed", LOG_LEVEL_DEBUG);
+  return SQL_SUCCESS;
 }
 
 // This function obtains the column name for the specified column number in the result set.
@@ -371,10 +483,10 @@ SQLRETURN getColName(StatementHandle* stmt, const SQLUSMALLINT columnNumber,
 void colTypeMapping(ConnectionHandle* cnct, std::string iotdbDataType,
                     const SQLUSMALLINT columnNumber, SQLSMALLINT* numericAttribute) {
   static const std::unordered_map<std::string, SQLSMALLINT> typeMap = {
-      {"BOOLEAN", SQL_BIT},    {"INT32", SQL_INTEGER},      {"INT64", SQL_BIGINT},
-      {"FLOAT", SQL_REAL},     {"DOUBLE", SQL_DOUBLE},      {"TEXT", SQL_LONGVARCHAR},
-      {"STRING", SQL_VARCHAR}, {"BLOB", SQL_LONGVARBINARY}, {"TIMESTAMP", SQL_BIGINT},
-      {"DATE", SQL_DATE}};
+      {"INT16", SQL_SMALLINT},   {"BOOLEAN", SQL_BIT},    {"INT32", SQL_INTEGER},
+      {"INT64", SQL_BIGINT},     {"FLOAT", SQL_REAL},     {"DOUBLE", SQL_DOUBLE},
+      {"TEXT", SQL_LONGVARCHAR}, {"STRING", SQL_VARCHAR}, {"BLOB", SQL_LONGVARBINARY},
+      {"TIMESTAMP", SQL_BIGINT}, {"DATE", SQL_DATE}};
 
   auto it = typeMap.find(iotdbDataType);
   if (it != typeMap.end()) {
@@ -425,7 +537,8 @@ SQLRETURN getColType(StatementHandle* stmt, const SQLUSMALLINT columnNumber,
     return SQL_ERROR;
   }
 
-  if (!stmt->resultSetPtr->getIsMetaData() || stmt->getConnection()->isTableModel) {
+  if (!stmt->resultSetPtr->getIsMetaData() || stmt->getConnection()->isTableModel ||
+      !stmt->resultSetPtr->getColumnType(columnNumber - 1).empty()) {
     logMessage(cnct, "getColType: Using column types from ODBCResultSet for type mapping",
                LOG_LEVEL_DEBUG);
 
@@ -598,7 +711,7 @@ SQLRETURN getNullable(StatementHandle* stmt, const SQLUSMALLINT columnNumber,
     return SQL_ERROR;
   }
 
-  if (stmt->resultSetPtr == nullptr || stmt->resultSetPtr->isEmpty()) {
+  if (stmt->resultSetPtr == nullptr) {
     logMessage(cnct, "getNullable: Result set is null or empty", LOG_LEVEL_ERROR);
     stmt->addDiagnostic("HY000", "No query result available");
     return SQL_ERROR;
@@ -1560,7 +1673,7 @@ SQLRETURN SQL_API SQLColumns(SQLHSTMT statementHandle, SQLCHAR* catalogName,
       // do nothing
     }
 
-    logMessage(cnct, "SQLColumns: Executing query: " + sqlCommand, LOG_LEVEL_DEBUG);
+    logMessage(cnct, "SQLColumns: Executing metadata query", LOG_LEVEL_DEBUG);
     SQLRETURN ret = SQLExecDirect(statementHandle, (SQLCHAR*)sqlCommand.data(), SQL_NTS);
     if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
       logMessage(cnct, "SQLColumns: Query completed unsuccessfully", LOG_LEVEL_ERROR);
@@ -1785,20 +1898,6 @@ SQLRETURN SQL_API SQLColumns(SQLHSTMT statementHandle, SQLCHAR* catalogName,
   }
 }
 
-SQLRETURN SQL_API SQLCompleteAsync(SQLSMALLINT handleType, SQLHANDLE handle,
-                                   RETCODE* asyncRetCodePtr) {
-  if (!handle) {
-    logMessage(nullptr, "SQLCompleteAsync: Invalid handle", LOG_LEVEL_ERROR);
-    return SQL_INVALID_HANDLE;
-  }
-  logMessage(nullptr, "SQLCompleteAsync is not implemented", LOG_LEVEL_ERROR);
-  if (handle) {
-    auto odbcHandle = static_cast<ODBCHandle*>(handle);
-    odbcHandle->addDiagnostic("IM001", "SQLCompleteAsync Function not implemented");
-  }
-  return SQL_ERROR;
-}
-
 SQLRETURN SQL_API SQLConnect(SQLHDBC connectionHandle, SQLCHAR* serverName, SQLSMALLINT nameLength1,
                              SQLCHAR* userName, SQLSMALLINT nameLength2, SQLCHAR* password,
                              SQLSMALLINT nameLength3) {
@@ -1807,106 +1906,143 @@ SQLRETURN SQL_API SQLConnect(SQLHDBC connectionHandle, SQLCHAR* serverName, SQLS
     return SQL_INVALID_HANDLE;
   }
   auto cnct = static_cast<ConnectionHandle*>(connectionHandle);
+  cnct->clearDiagnostics();
   logMessage(cnct, "SQLConnect: Entering", LOG_LEVEL_TRACE);
 
-  std::string dsnName;
-  if (serverName) {
-    if (nameLength1 == SQL_NTS)
-      dsnName = reinterpret_cast<const char*>(serverName);
-    else if (nameLength1 > 0)
-      dsnName = std::string(reinterpret_cast<const char*>(serverName), nameLength1);
-  }
-  logMessage(cnct, "SQLConnect: DSN='" + dsnName + "'", LOG_LEVEL_INFO);
-
-  if (dsnName.empty()) {
-    logMessage(cnct, "SQLConnect: DSN name is empty", LOG_LEVEL_ERROR);
-    cnct->addDiagnostic("IM002", "Data source name not found and no default driver specified");
+  if ((nameLength1 < 0 && nameLength1 != SQL_NTS) || (nameLength2 < 0 && nameLength2 != SQL_NTS) ||
+      (nameLength3 < 0 && nameLength3 != SQL_NTS)) {
+    cnct->addDiagnostic("HY090", "Invalid string or buffer length");
     return SQL_ERROR;
   }
 
-  cnct->LoadDsnFromOdbcIni(dsnName);
-
-  if (userName) {
-    std::string uid;
-    if (nameLength2 == SQL_NTS)
-      uid = reinterpret_cast<const char*>(userName);
-    else if (nameLength2 > 0)
-      uid = std::string(reinterpret_cast<const char*>(userName), nameLength2);
-    if (!uid.empty()) {
-      cnct->userName = uid;
-      logMessage(cnct, "SQLConnect: UID overridden from parameter: " + uid, LOG_LEVEL_DEBUG);
+  try {
+    std::string dsnName;
+    if (serverName) {
+      if (nameLength1 == SQL_NTS)
+        dsnName = reinterpret_cast<const char*>(serverName);
+      else if (nameLength1 > 0)
+        dsnName = std::string(reinterpret_cast<const char*>(serverName), nameLength1);
     }
-  }
+    logMessage(cnct, "SQLConnect: DSN='" + dsnName + "'", LOG_LEVEL_INFO);
 
-  if (password) {
-    std::string pwd;
-    if (nameLength3 == SQL_NTS)
-      pwd = reinterpret_cast<const char*>(password);
-    else if (nameLength3 > 0)
-      pwd = std::string(reinterpret_cast<const char*>(password), nameLength3);
-    if (!pwd.empty()) {
-      cnct->password = pwd;
-      logMessage(cnct, "SQLConnect: PWD overridden from parameter", LOG_LEVEL_DEBUG);
+    if (dsnName.empty()) {
+      logMessage(cnct, "SQLConnect: DSN name is empty", LOG_LEVEL_ERROR);
+      cnct->addDiagnostic("IM002", "Data source name not found and no default driver specified");
+      return SQL_ERROR;
     }
-  }
 
-  if (cnct->isTableModel && cnct->database.empty()) {
-    logMessage(cnct, "SQLConnect: Database not set, using 'information_schema' as default",
-               LOG_LEVEL_INFO);
-    cnct->database = "information_schema";
-  }
+    cnct->LoadDsnFromOdbcIni(dsnName);
 
-  if (isLogLevelEnabled(cnct, LOG_LEVEL_INFO)) {
-    std::ostringstream oss;
-    oss << "SQLConnect: Connecting with Server=" << cnct->serverHostName
-        << ", Port=" << cnct->serverPort << ", UID=" << cnct->userName
-        << ", Database=" << cnct->database
-        << ", TableModel=" << (cnct->isTableModel ? "true" : "false");
-    logMessage(cnct, oss.str(), LOG_LEVEL_INFO);
-  }
+    if (userName) {
+      std::string uid;
+      if (nameLength2 == SQL_NTS)
+        uid = reinterpret_cast<const char*>(userName);
+      else if (nameLength2 > 0)
+        uid = std::string(reinterpret_cast<const char*>(userName), nameLength2);
+      if (!uid.empty()) {
+        cnct->userName = uid;
+        logMessage(cnct, "SQLConnect: UID overridden from parameter: " + uid, LOG_LEVEL_DEBUG);
+      }
+    }
 
-  SQLRETURN returnCode;
-  if (cnct->useRestful) {
-    logMessage(cnct, "SQLConnect: Connecting using RESTful API", LOG_LEVEL_DEBUG);
-    returnCode = IoTDB_DriverConnect_Rest(cnct);
-  } else {
-    logMessage(cnct, "SQLConnect: Connecting using Session API", LOG_LEVEL_DEBUG);
-    returnCode = IoTDB_DriverConnect_Session(cnct);
-  }
+    if (password) {
+      std::string pwd;
+      if (nameLength3 == SQL_NTS)
+        pwd = reinterpret_cast<const char*>(password);
+      else if (nameLength3 > 0)
+        pwd = std::string(reinterpret_cast<const char*>(password), nameLength3);
+      if (!pwd.empty()) {
+        cnct->password = pwd;
+        logMessage(cnct, "SQLConnect: PWD overridden from parameter", LOG_LEVEL_DEBUG);
+      }
+    }
 
-  logMessage(cnct, "SQLConnect: Exiting with return code: " + std::to_string(returnCode),
-             LOG_LEVEL_TRACE);
-  return returnCode;
+    if (cnct->isTableModel && cnct->database.empty()) {
+      logMessage(cnct, "SQLConnect: Database not set, using 'information_schema' as default",
+                 LOG_LEVEL_INFO);
+      cnct->database = "information_schema";
+    }
+
+    if (isLogLevelEnabled(cnct, LOG_LEVEL_INFO)) {
+      std::ostringstream oss;
+      oss << "SQLConnect: Connecting with Server=" << cnct->serverHostName
+          << ", Port=" << cnct->serverPort << ", UID=" << cnct->userName
+          << ", Database=" << cnct->database
+          << ", TableModel=" << (cnct->isTableModel ? "true" : "false");
+      logMessage(cnct, oss.str(), LOG_LEVEL_INFO);
+    }
+
+    SQLRETURN returnCode;
+    if (cnct->useRestful) {
+      logMessage(cnct, "SQLConnect: Connecting using RESTful API", LOG_LEVEL_DEBUG);
+      returnCode = IoTDB_DriverConnect_Rest(cnct);
+    } else {
+      logMessage(cnct, "SQLConnect: Connecting using Session API", LOG_LEVEL_DEBUG);
+      returnCode = IoTDB_DriverConnect_Session(cnct);
+    }
+
+    logMessage(cnct, "SQLConnect: Exiting with return code: " + std::to_string(returnCode),
+               LOG_LEVEL_TRACE);
+    return returnCode;
+  } catch (const std::exception& error) {
+    cnct->addDiagnostic("08001", error.what());
+    return SQL_ERROR;
+  }
 }
 
 SQLRETURN SQL_API SQLCopyDesc(SQLHDESC sourceDescHandle, SQLHDESC targetDescHandle) {
-  if (!sourceDescHandle && !targetDescHandle) {
-    logMessage(nullptr, "SQLCopyDesc: Invalid descriptor handle", LOG_LEVEL_ERROR);
+  if (!sourceDescHandle || !targetDescHandle)
     return SQL_INVALID_HANDLE;
+  auto* source = static_cast<DescriptorHandle*>(sourceDescHandle);
+  auto* target = static_cast<DescriptorHandle*>(targetDescHandle);
+  if (source->getHandleType() != SQL_HANDLE_DESC || target->getHandleType() != SQL_HANDLE_DESC)
+    return SQL_INVALID_HANDLE;
+  target->clearDiagnostics();
+  if (target->role == DescriptorRole::IMPLEMENTATION_ROW) {
+    target->addDiagnostic("HY016", "Cannot modify an implementation row descriptor");
+    return SQL_ERROR;
   }
-  logMessage(nullptr, "SQLCopyDesc is not implemented", LOG_LEVEL_ERROR);
-  SQLHANDLE handle = targetDescHandle ? targetDescHandle : sourceDescHandle;
-  if (handle) {
-    auto odbcHandle = static_cast<ODBCHandle*>(handle);
-    odbcHandle->addDiagnostic("IM001", "SQLCopyDesc Function not implemented");
+  if (source->connection != target->connection) {
+    target->addDiagnostic("HY024", "Descriptor handles belong to different connections");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  target->arraySize = source->arraySize;
+  target->arrayStatusPtr = source->arrayStatusPtr;
+  target->bindOffsetPtr = source->bindOffsetPtr;
+  target->bindType = source->bindType;
+  target->count = source->count;
+  target->rowsProcessedPtr = source->rowsProcessedPtr;
+  target->records = source->records;
+  return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLDataSources(SQLHENV environmentHandle, SQLUSMALLINT direction,
                                  SQLCHAR* serverName, SQLSMALLINT bufferLength1,
                                  SQLSMALLINT* nameLength1Ptr, SQLCHAR* description,
                                  SQLSMALLINT bufferLength2, SQLSMALLINT* nameLength2Ptr) {
-  if (!environmentHandle) {
-    logMessage(nullptr, "SQLDataSources: Invalid environment handle", LOG_LEVEL_ERROR);
+  if (!environmentHandle)
     return SQL_INVALID_HANDLE;
+  auto* env = static_cast<EnvironmentHandle*>(environmentHandle);
+  env->clearDiagnostics();
+  if (direction != SQL_FETCH_FIRST && direction != SQL_FETCH_NEXT &&
+      direction != SQL_FETCH_FIRST_USER && direction != SQL_FETCH_FIRST_SYSTEM) {
+    env->addDiagnostic("HY103", "Invalid retrieval code");
+    return SQL_ERROR;
   }
-  logMessage(nullptr, "SQLDataSources is not implemented", LOG_LEVEL_ERROR);
-  auto env = static_cast<EnvironmentHandle*>(environmentHandle);
-  if (env) {
-    env->addDiagnostic("IM001", "SQLDataSources Function not implemented");
+  if (bufferLength1 < 0 || bufferLength2 < 0) {
+    env->addDiagnostic("HY090", "Invalid string or buffer length");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  if (nameLength1Ptr)
+    *nameLength1Ptr = 0;
+  if (nameLength2Ptr)
+    *nameLength2Ptr = 0;
+  if (serverName && bufferLength1 > 0)
+    serverName[0] = '\0';
+  if (description && bufferLength2 > 0)
+    description[0] = '\0';
+  // Driver Manager-owned DSN enumeration is not duplicated by the driver.
+  return SQL_NO_DATA;
 }
 
 SQLRETURN SQL_API SQLDescribeCol(SQLHSTMT statementHandle, SQLUSMALLINT columnNumber,
@@ -2038,7 +2174,6 @@ SQLRETURN SQL_API SQLEndTran(SQLSMALLINT handleType, SQLHANDLE handle, SQLSMALLI
 
   EnvironmentHandle* env = nullptr;
   ConnectionHandle* cnct = nullptr;
-  StatementHandle* stmt = nullptr;
   if (handleType == SQL_HANDLE_ENV) {
     if (baseHandle && baseHandle->getHandleType() != SQL_HANDLE_ENV) {
       baseHandle->addDiagnostic("HY092", "Invalid handle type for SQLEndTran: expected ENV");
@@ -2051,14 +2186,6 @@ SQLRETURN SQL_API SQLEndTran(SQLSMALLINT handleType, SQLHANDLE handle, SQLSMALLI
       return SQL_INVALID_HANDLE;
     }
     cnct = static_cast<ConnectionHandle*>(handle);
-    env = cnct ? cnct->getEnvironment() : nullptr;
-  } else if (handleType == SQL_HANDLE_STMT) {
-    if (baseHandle && baseHandle->getHandleType() != SQL_HANDLE_STMT) {
-      baseHandle->addDiagnostic("HY092", "Invalid handle type for SQLEndTran: expected STMT");
-      return SQL_INVALID_HANDLE;
-    }
-    stmt = static_cast<StatementHandle*>(handle);
-    cnct = stmt ? stmt->getConnection() : nullptr;
     env = cnct ? cnct->getEnvironment() : nullptr;
   }
 
@@ -2100,8 +2227,6 @@ SQLRETURN SQL_API SQLEndTran(SQLSMALLINT handleType, SQLHANDLE handle, SQLSMALLI
   ODBCHandle* diagTarget = nullptr;
   if (cnct) {
     diagTarget = cnct;
-  } else if (stmt) {
-    diagTarget = stmt;
   } else if (env) {
     diagTarget = env;
   } else if (baseHandle) {
@@ -2109,8 +2234,7 @@ SQLRETURN SQL_API SQLEndTran(SQLSMALLINT handleType, SQLHANDLE handle, SQLSMALLI
   }
 
   // Validate handleType
-  if (handleType != SQL_HANDLE_ENV && handleType != SQL_HANDLE_DBC &&
-      handleType != SQL_HANDLE_STMT) {
+  if (handleType != SQL_HANDLE_ENV && handleType != SQL_HANDLE_DBC) {
     logMessage(cnct, "SQLEndTran: Invalid HandleType", LOG_LEVEL_ERROR);
     if (diagTarget) {
       diagTarget->addDiagnostic("HY092", "Invalid attribute/option identifier");
@@ -2128,22 +2252,17 @@ SQLRETURN SQL_API SQLEndTran(SQLSMALLINT handleType, SQLHANDLE handle, SQLSMALLI
   }
 
   // IoTDB reports SQL_TXN_CAPABLE = SQL_TC_NONE (no transactions).
-  // Per ODBC spec, drivers/data sources that do not support transactions should return SQL_SUCCESS
-  // for SQLEndTran. We additionally return SQL_SUCCESS_WITH_INFO for ROLLBACK to inform callers
-  // that the request is ignored.
   if (completionType == SQL_COMMIT) {
     logMessage(cnct, "SQLEndTran: COMMIT requested; IoTDB has no transactions, no-op",
                LOG_LEVEL_TRACE);
     return SQL_SUCCESS;
   }
 
-  // completionType == SQL_ROLLBACK
-  logMessage(cnct, "SQLEndTran: ROLLBACK requested; IoTDB has no transactions, ignored",
-             LOG_LEVEL_DEBUG);
+  logMessage(cnct, "SQLEndTran: ROLLBACK requested but IoTDB has no transactions", LOG_LEVEL_DEBUG);
   if (diagTarget) {
     diagTarget->addDiagnostic("HYC00", "IoTDB does not support transactions; rollback ignored");
   }
-  return SQL_SUCCESS_WITH_INFO;
+  return SQL_ERROR;
 }
 
 SQLRETURN SQLError(SQLHENV environmentHandle, // Input: Environment handle
@@ -2352,6 +2471,65 @@ SQLRETURN IoTDB_ExecDirect(StatementHandle* const stmt, const std::string& state
   }
 }
 
+static void PopulateImplementationRowDescriptor(StatementHandle* stmt) {
+  auto* descriptor = stmt->implicitImpRowDesc;
+  descriptor->records.clear();
+  descriptor->count = 0;
+  if (!stmt->resultSetPtr)
+    return;
+  descriptor->records.resize(static_cast<size_t>(stmt->resultSetPtr->getNumColumns()));
+  descriptor->count =
+      static_cast<SQLSMALLINT>(std::min(stmt->resultSetPtr->getNumColumns(),
+                                        static_cast<int>(std::numeric_limits<SQLSMALLINT>::max())));
+  for (SQLSMALLINT index = 0; index < descriptor->count; ++index) {
+    DescriptorRecord& record = descriptor->records[static_cast<size_t>(index)];
+    record.name = stmt->resultSetPtr->getColumnName(static_cast<size_t>(index));
+    record.unnamed = record.name.empty() ? SQL_UNNAMED : SQL_NAMED;
+    std::string type = stmt->resultSetPtr->getColumnType(static_cast<size_t>(index));
+    std::transform(type.begin(), type.end(), type.begin(), [](unsigned char character) {
+      return static_cast<char>(std::toupper(character));
+    });
+    if (type == "BOOLEAN") {
+      record.type = record.conciseType = SQL_BIT;
+      record.length = record.octetLength = 1;
+    } else if (type == "INT16") {
+      record.type = record.conciseType = SQL_SMALLINT;
+      record.length = record.octetLength = sizeof(SQLSMALLINT);
+      record.precision = 5;
+      record.numPrecRadix = 10;
+    } else if (type == "INT32") {
+      record.type = record.conciseType = SQL_INTEGER;
+      record.length = record.octetLength = sizeof(SQLINTEGER);
+      record.precision = 10;
+      record.numPrecRadix = 10;
+    } else if (type == "INT64" || type == "TIMESTAMP") {
+      record.type = record.conciseType = SQL_BIGINT;
+      record.length = record.octetLength = sizeof(SQLBIGINT);
+      record.precision = 19;
+      record.numPrecRadix = 10;
+    } else if (type == "FLOAT") {
+      record.type = record.conciseType = SQL_REAL;
+      record.length = record.octetLength = sizeof(float);
+      record.precision = 7;
+      record.numPrecRadix = 2;
+    } else if (type == "DOUBLE") {
+      record.type = record.conciseType = SQL_DOUBLE;
+      record.length = record.octetLength = sizeof(double);
+      record.precision = 15;
+      record.numPrecRadix = 2;
+    } else if (type == "DATE") {
+      record.setConciseType(SQL_TYPE_DATE);
+      record.length = 10;
+      record.octetLength = sizeof(DATE_STRUCT);
+    } else if (type == "BLOB") {
+      record.type = record.conciseType = SQL_LONGVARBINARY;
+    } else {
+      record.type = record.conciseType = SQL_VARCHAR;
+    }
+    record.nullable = SQL_NULLABLE_UNKNOWN;
+  }
+}
+
 SQLRETURN SQL_API SQLExecDirect(SQLHSTMT statementHandle, SQLCHAR* statementText,
                                 SQLINTEGER textLength) {
   StatementHandle* stmt = static_cast<StatementHandle*>(statementHandle);
@@ -2361,8 +2539,8 @@ SQLRETURN SQL_API SQLExecDirect(SQLHSTMT statementHandle, SQLCHAR* statementText
   if (isLogLevelEnabled(cnct, LOG_LEVEL_TRACE)) {
     std::stringstream logStream;
     logStream << "SQLExecDirect parameters: "
-              << "statementHandle = " << handleToString(statementHandle) << ", statementText = "
-              << (statementText ? reinterpret_cast<const char*>(statementText) : "nullptr")
+              << "statementHandle = " << handleToString(statementHandle)
+              << ", statementText = " << (statementText ? "provided" : "nullptr")
               << ", textLength = " << textLength;
     logMessage(cnct, logStream.str(), LOG_LEVEL_TRACE);
   }
@@ -2371,12 +2549,28 @@ SQLRETURN SQL_API SQLExecDirect(SQLHSTMT statementHandle, SQLCHAR* statementText
     logMessage(cnct, "SQLExecDirect: Invalid statement handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
+  stmt->clearDiagnostics();
+  if (!statementText) {
+    stmt->addDiagnostic("HY009", "Invalid use of null pointer");
+    return SQL_ERROR;
+  }
+  if (textLength < 0 && textLength != SQL_NTS) {
+    stmt->addDiagnostic("HY090", "Invalid string or buffer length");
+    return SQL_ERROR;
+  }
+  stmt->prepared = false;
+  stmt->rowsReturned = 0;
+  stmt->curRow = -1;
+  stmt->streamCurRow = 0;
+  stmt->isStream = false;
 
   // Convert SQLCHAR to std::string
   std::string sqlStatement = ConvertSQLCHARToString(statementText, textLength);
-  logMessage(cnct, "SQLExecDirect: Executing statement: " + sqlStatement, LOG_LEVEL_DEBUG);
+  logMessage(cnct, "SQLExecDirect: Executing statement", LOG_LEVEL_DEBUG);
 
   const SQLRETURN returnCode = IoTDB_ExecDirect(stmt, sqlStatement);
+  if (SQL_SUCCEEDED(returnCode))
+    PopulateImplementationRowDescriptor(stmt);
   if (returnCode != SQL_SUCCESS) {
     logMessage(cnct, "SQLExecDirect: Execution failed with code: " + std::to_string(returnCode),
                LOG_LEVEL_ERROR);
@@ -2388,47 +2582,487 @@ SQLRETURN SQL_API SQLExecDirect(SQLHSTMT statementHandle, SQLCHAR* statementText
   return returnCode;
 }
 
+static bool IsDataAtExecution(SQLLEN indicator) {
+  return indicator == SQL_DATA_AT_EXEC || indicator <= SQL_LEN_DATA_AT_EXEC_OFFSET;
+}
+
+static size_t CTypeSize(SQLSMALLINT type, SQLLEN bufferLength) {
+  switch (type) {
+  case SQL_C_BIT:
+  case SQL_C_TINYINT:
+  case SQL_C_STINYINT:
+  case SQL_C_UTINYINT:
+    return 1;
+  case SQL_C_SSHORT:
+  case SQL_C_SHORT:
+  case SQL_C_USHORT:
+    return sizeof(SQLSMALLINT);
+  case SQL_C_SLONG:
+  case SQL_C_LONG:
+  case SQL_C_ULONG:
+    return sizeof(SQLINTEGER);
+  case SQL_C_SBIGINT:
+  case SQL_C_UBIGINT:
+    return sizeof(SQLBIGINT);
+  case SQL_C_FLOAT:
+    return sizeof(float);
+  case SQL_C_DOUBLE:
+    return sizeof(double);
+  case SQL_C_TYPE_DATE:
+  case SQL_C_DATE:
+    return sizeof(DATE_STRUCT);
+  case SQL_C_TYPE_TIME:
+  case SQL_C_TIME:
+    return sizeof(TIME_STRUCT);
+  case SQL_C_TYPE_TIMESTAMP:
+  case SQL_C_TIMESTAMP:
+    return sizeof(TIMESTAMP_STRUCT);
+  default:
+    return static_cast<size_t>(std::max<SQLLEN>(bufferLength, 1));
+  }
+}
+
+static SQLSMALLINT DefaultParameterCType(SQLSMALLINT sqlType) {
+  switch (sqlType) {
+  case SQL_BIT:
+    return SQL_C_BIT;
+  case SQL_TINYINT:
+  case SQL_SMALLINT:
+  case SQL_INTEGER:
+    return SQL_C_SLONG;
+  case SQL_BIGINT:
+    return SQL_C_SBIGINT;
+  case SQL_REAL:
+    return SQL_C_FLOAT;
+  case SQL_FLOAT:
+  case SQL_DOUBLE:
+  case SQL_DECIMAL:
+  case SQL_NUMERIC:
+    return SQL_C_DOUBLE;
+  case SQL_TYPE_DATE:
+  case SQL_DATE:
+    return SQL_C_TYPE_DATE;
+  case SQL_TYPE_TIME:
+  case SQL_TIME:
+    return SQL_C_TYPE_TIME;
+  case SQL_TYPE_TIMESTAMP:
+  case SQL_TIMESTAMP:
+    return SQL_C_TYPE_TIMESTAMP;
+  case SQL_BINARY:
+  case SQL_VARBINARY:
+  case SQL_LONGVARBINARY:
+    return SQL_C_BINARY;
+  default:
+    return SQL_C_CHAR;
+  }
+}
+
+static SQLPOINTER ParameterValueAt(const StatementHandle* stmt, const ParameterBinding& binding,
+                                   SQLULEN set) {
+  if (!binding.valuePtr)
+    return nullptr;
+  const SQLULEN offset = stmt->paramBindOffsetPtr ? *stmt->paramBindOffsetPtr : 0;
+  const size_t stride = stmt->paramBindType == SQL_BIND_BY_COLUMN
+                            ? CTypeSize(binding.valueType == SQL_C_DEFAULT
+                                            ? DefaultParameterCType(binding.parameterType)
+                                            : binding.valueType,
+                                        binding.bufferLength)
+                            : static_cast<size_t>(stmt->paramBindType);
+  return static_cast<char*>(binding.valuePtr) + offset + set * stride;
+}
+
+static SQLLEN ParameterIndicatorAt(const StatementHandle* stmt, const ParameterBinding& binding,
+                                   SQLULEN set) {
+  const SQLULEN offset = stmt->paramBindOffsetPtr ? *stmt->paramBindOffsetPtr : 0;
+  const SQLULEN stride =
+      stmt->paramBindType == SQL_BIND_BY_COLUMN ? sizeof(SQLLEN) : stmt->paramBindType;
+  auto read = [&](const SQLLEN* pointer) {
+    SQLLEN result;
+    std::memcpy(&result, reinterpret_cast<const char*>(pointer) + offset + set * stride,
+                sizeof(result));
+    return result;
+  };
+  if (binding.indicatorPtr && read(binding.indicatorPtr) == SQL_NULL_DATA)
+    return SQL_NULL_DATA;
+  if (binding.octetLengthPtr)
+    return read(binding.octetLengthPtr);
+  const SQLSMALLINT type = binding.valueType == SQL_C_DEFAULT
+                               ? DefaultParameterCType(binding.parameterType)
+                               : binding.valueType;
+  return type == SQL_C_CHAR || type == SQL_C_WCHAR ? SQL_NTS : binding.bufferLength;
+}
+
+static std::string QuoteSqlString(const std::string& value) {
+  std::string result("'");
+  for (char character : value) {
+    result.push_back(character);
+    if (character == '\'')
+      result.push_back('\'');
+  }
+  result.push_back('\'');
+  return result;
+}
+
+static bool ParameterLiteral(StatementHandle* stmt, ParameterBinding& binding, SQLULEN set,
+                             std::string& literal) {
+  const SQLSMALLINT valueType = binding.valueType == SQL_C_DEFAULT
+                                    ? DefaultParameterCType(binding.parameterType)
+                                    : binding.valueType;
+  SQLLEN indicator = ParameterIndicatorAt(stmt, binding, set);
+  SQLPOINTER value = ParameterValueAt(stmt, binding, set);
+  alignas(long double) char streamedValue[sizeof(TIMESTAMP_STRUCT)]{};
+  if (indicator == SQL_NULL_DATA) {
+    literal = "NULL";
+    return true;
+  }
+  if (IsDataAtExecution(indicator)) {
+    if (set >= binding.streamedData.size() || set >= binding.streamedNull.size()) {
+      stmt->addDiagnostic("HY010", "Parameter data has not been supplied");
+      return false;
+    }
+    if (binding.streamedNull[set]) {
+      literal = "NULL";
+      return true;
+    }
+    const auto& bytes = binding.streamedData[set];
+    indicator = static_cast<SQLLEN>(bytes.size());
+    value = const_cast<char*>(bytes.data());
+    if (valueType != SQL_C_CHAR && valueType != SQL_C_WCHAR && valueType != SQL_C_BINARY) {
+      const size_t required = CTypeSize(valueType, binding.bufferLength);
+      if (required > sizeof(streamedValue) || bytes.size() != required) {
+        stmt->addDiagnostic("HY090", "Invalid string or buffer length");
+        return false;
+      }
+      std::memcpy(streamedValue, bytes.data(), required);
+      value = streamedValue;
+    }
+  }
+  if (!value) {
+    stmt->addDiagnostic("HY009", "Invalid use of null parameter value pointer");
+    return false;
+  }
+  std::ostringstream output;
+  if (indicator < 0 &&
+      !(indicator == SQL_NTS && (valueType == SQL_C_CHAR || valueType == SQL_C_WCHAR))) {
+    stmt->addDiagnostic("HY090", "Invalid string or buffer length");
+    return false;
+  }
+  output.imbue(std::locale::classic());
+  output << std::setprecision(std::numeric_limits<double>::max_digits10);
+  switch (valueType) {
+  case SQL_C_CHAR: {
+    const char* text = static_cast<const char*>(value);
+    const size_t length = indicator == SQL_NTS ? std::strlen(text) : static_cast<size_t>(indicator);
+    literal = QuoteSqlString(std::string(text, length));
+    return true;
+  }
+  case SQL_C_WCHAR: {
+    const auto* text = static_cast<const SQLWCHAR*>(value);
+    const size_t length = indicator == SQL_NTS ? std::char_traits<SQLWCHAR>::length(text)
+                                               : static_cast<size_t>(indicator) / sizeof(SQLWCHAR);
+    std::u16string utf16(length, u'\0');
+    if (length)
+      std::memcpy(&utf16[0], text, length * sizeof(SQLWCHAR));
+    literal = QuoteSqlString(
+        std::wstring_convert<std::codecvt_utf8_utf16<char16_t>, char16_t>().to_bytes(utf16));
+    return true;
+  }
+  case SQL_C_BIT:
+    output << (*static_cast<const unsigned char*>(value) ? 1 : 0);
+    break;
+  case SQL_C_STINYINT:
+  case SQL_C_TINYINT:
+    output << static_cast<int>(*static_cast<const signed char*>(value));
+    break;
+  case SQL_C_UTINYINT:
+    output << static_cast<unsigned int>(*static_cast<const unsigned char*>(value));
+    break;
+  case SQL_C_SSHORT:
+  case SQL_C_SHORT:
+    output << *static_cast<const SQLSMALLINT*>(value);
+    break;
+  case SQL_C_USHORT:
+    output << *static_cast<const SQLUSMALLINT*>(value);
+    break;
+  case SQL_C_SLONG:
+  case SQL_C_LONG:
+    output << *static_cast<const SQLINTEGER*>(value);
+    break;
+  case SQL_C_ULONG:
+    output << *static_cast<const SQLUINTEGER*>(value);
+    break;
+  case SQL_C_SBIGINT:
+    output << *static_cast<const SQLBIGINT*>(value);
+    break;
+  case SQL_C_UBIGINT:
+    output << *static_cast<const SQLUBIGINT*>(value);
+    break;
+  case SQL_C_FLOAT:
+    output << *static_cast<const float*>(value);
+    break;
+  case SQL_C_DOUBLE:
+    output << *static_cast<const double*>(value);
+    break;
+  case SQL_C_BINARY: {
+    const size_t length = static_cast<size_t>(indicator);
+    static constexpr char digits[] = "0123456789ABCDEF";
+    literal = "X'";
+    for (size_t index = 0; index < length; ++index) {
+      const unsigned char byte = static_cast<const unsigned char*>(value)[index];
+      literal.push_back(digits[byte >> 4]);
+      literal.push_back(digits[byte & 0x0F]);
+    }
+    literal.push_back('\'');
+    return true;
+  }
+  case SQL_C_TYPE_DATE:
+  case SQL_C_DATE: {
+    const auto* date = static_cast<const DATE_STRUCT*>(value);
+    output << "'" << std::setfill('0') << std::setw(4) << date->year << "-" << std::setw(2)
+           << date->month << "-" << std::setw(2) << date->day << "'";
+    break;
+  }
+  case SQL_C_TYPE_TIME:
+  case SQL_C_TIME: {
+    const auto* time = static_cast<const TIME_STRUCT*>(value);
+    output << "'" << std::setfill('0') << std::setw(2) << time->hour << ":" << std::setw(2)
+           << time->minute << ":" << std::setw(2) << time->second << "'";
+    break;
+  }
+  case SQL_C_TYPE_TIMESTAMP:
+  case SQL_C_TIMESTAMP: {
+    const auto* timestamp = static_cast<const TIMESTAMP_STRUCT*>(value);
+    output << "'" << std::setfill('0') << std::setw(4) << timestamp->year << "-" << std::setw(2)
+           << timestamp->month << "-" << std::setw(2) << timestamp->day << " " << std::setw(2)
+           << timestamp->hour << ":" << std::setw(2) << timestamp->minute << ":" << std::setw(2)
+           << timestamp->second << "." << std::setw(9) << timestamp->fraction << "'";
+    break;
+  }
+  default:
+    stmt->addDiagnostic("HYC00", "Unsupported parameter C data type");
+    return false;
+  }
+  literal = output.str();
+  return true;
+}
+
+static bool RenderParameters(StatementHandle* stmt, SQLULEN set, std::string& sql) {
+  const std::vector<size_t> markers = ParameterMarkerPositions(stmt->statementText);
+  if (markers.size() > stmt->parameterBindings.size()) {
+    stmt->addDiagnostic("07002", "COUNT field incorrect: not all parameters are bound");
+    return false;
+  }
+  sql.clear();
+  size_t previous = 0;
+  for (size_t index = 0; index < markers.size(); ++index) {
+    ParameterBinding& binding = stmt->parameterBindings[index];
+    if (!binding.bound) {
+      stmt->addDiagnostic("07002", "COUNT field incorrect: parameter is not bound");
+      return false;
+    }
+    std::string literal;
+    if (!ParameterLiteral(stmt, binding, set, literal))
+      return false;
+    sql.append(stmt->statementText, previous, markers[index] - previous);
+    sql += literal;
+    previous = markers[index] + 1;
+  }
+  sql.append(stmt->statementText, previous, std::string::npos);
+  return true;
+}
+
+static SQLRETURN ExecuteParameterSets(StatementHandle* stmt) {
+  SQLRETURN result = SQL_SUCCESS;
+  if (stmt->paramsProcessedPtr)
+    *stmt->paramsProcessedPtr = 0;
+  for (SQLULEN set = 0; set < stmt->paramSetSize; ++set) {
+    std::string sql;
+    if (!RenderParameters(stmt, set, sql)) {
+      result = SQL_ERROR;
+    } else {
+      logMessage(stmt->getConnection(), "SQLExecute: Executing prepared statement",
+                 LOG_LEVEL_DEBUG);
+      stmt->curRow = -1;
+      stmt->streamCurRow = 0;
+      stmt->isStream = false;
+      result = IoTDB_ExecDirect(stmt, sql, false);
+      if (SQL_SUCCEEDED(result))
+        PopulateImplementationRowDescriptor(stmt);
+    }
+    if (stmt->paramStatusPtr)
+      stmt->paramStatusPtr[set] = SQL_SUCCEEDED(result) ? SQL_PARAM_SUCCESS : SQL_PARAM_ERROR;
+    if (stmt->paramsProcessedPtr)
+      *stmt->paramsProcessedPtr = set + 1;
+    if (!SQL_SUCCEEDED(result))
+      return result;
+  }
+  return result;
+}
+
+static void SyncParameterBindingsFromDescriptors(StatementHandle* stmt) {
+  auto* apd = static_cast<DescriptorHandle*>(stmt->appParamDesc);
+  auto* ipd = static_cast<DescriptorHandle*>(stmt->impParamDesc);
+  stmt->paramSetSize = apd->arraySize;
+  stmt->paramBindType = apd->bindType;
+  stmt->paramBindOffsetPtr = reinterpret_cast<SQLULEN*>(apd->bindOffsetPtr);
+  stmt->paramsProcessedPtr = ipd->rowsProcessedPtr;
+  stmt->paramStatusPtr = ipd->arrayStatusPtr;
+  const SQLSMALLINT count = apd->count;
+  stmt->parameterBindings.assign(static_cast<size_t>(count), ParameterBinding());
+  for (int number = 1; number <= count; ++number) {
+    const DescriptorRecord* app = apd->findRecord(number);
+    const DescriptorRecord* implementation = ipd->findRecord(number);
+    if (!app)
+      continue;
+    ParameterBinding& binding = stmt->parameterBindings[static_cast<size_t>(number - 1)];
+    binding.valueType = app->conciseType;
+    binding.valuePtr = app->dataPtr;
+    binding.bufferLength = app->octetLength;
+    binding.indicatorPtr = app->indicatorPtr;
+    binding.octetLengthPtr = app->octetLengthPtr;
+    if (implementation) {
+      binding.inputOutputType = implementation->parameterType;
+      binding.parameterType = implementation->conciseType;
+      binding.columnSize = implementation->length;
+      binding.decimalDigits = implementation->scale;
+    }
+    binding.bound = app->dataPtr != nullptr || binding.indicatorPtr != nullptr ||
+                    binding.octetLengthPtr != nullptr;
+  }
+}
+
 SQLRETURN SQL_API SQLExecute(SQLHSTMT statementHandle) {
   if (!statementHandle) {
     logMessage(nullptr, "SQLExecute: Invalid statement handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
   auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLExecute is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLExecute Function not implemented");
+  stmt->clearDiagnostics();
+  if (stmt->needsParameterData) {
+    stmt->addDiagnostic("HY010", "Function sequence error");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  if (!stmt->prepared) {
+    stmt->addDiagnostic("HY010", "Statement has not been prepared");
+    return SQL_ERROR;
+  }
+  stmt->rowsReturned = 0;
+  SyncParameterBindingsFromDescriptors(stmt);
+  const std::vector<size_t> markers = ParameterMarkerPositions(stmt->statementText);
+  if (stmt->paramsProcessedPtr)
+    *stmt->paramsProcessedPtr = 0;
+  if (stmt->paramStatusPtr)
+    std::fill(stmt->paramStatusPtr, stmt->paramStatusPtr + stmt->paramSetSize, SQL_PARAM_UNUSED);
+  for (size_t index = 0; index < markers.size(); ++index) {
+    if (index >= stmt->parameterBindings.size() || !stmt->parameterBindings[index].bound) {
+      stmt->addDiagnostic("07002", "COUNT field incorrect: not all parameters are bound");
+      return SQL_ERROR;
+    }
+    for (SQLULEN set = 0; set < stmt->paramSetSize; ++set) {
+      if (IsDataAtExecution(ParameterIndicatorAt(stmt, stmt->parameterBindings[index], set))) {
+        stmt->needsParameterData = true;
+        stmt->nextDataSet = 0;
+        stmt->activeDataSet = std::numeric_limits<SQLULEN>::max();
+        stmt->nextDataParameter = 0;
+        stmt->activeDataParameter = std::numeric_limits<size_t>::max();
+        for (auto& binding : stmt->parameterBindings) {
+          binding.streamedData.assign(stmt->paramSetSize, std::string());
+          binding.streamedNull.assign(stmt->paramSetSize, false);
+        }
+        return SQL_NEED_DATA;
+      }
+    }
+  }
+  try {
+    return ExecuteParameterSets(stmt);
+  } catch (const std::exception& error) {
+    stmt->addDiagnostic("HY000", error.what());
+    return SQL_ERROR;
+  }
 }
 
-SQLRETURN fillColBindBuffer(StatementHandle* stmt, SQLUSMALLINT col, const ODBCField& value) {
+static void SyncColumnBindingsFromDescriptor(StatementHandle* stmt) {
+  auto* ard = static_cast<DescriptorHandle*>(stmt->appRowDesc);
+  stmt->rowArraySize = ard->arraySize;
+  stmt->rowBindType = ard->bindType;
+  stmt->rowBindOffsetPtr = reinterpret_cast<SQLULEN*>(ard->bindOffsetPtr);
+  auto* ird = static_cast<DescriptorHandle*>(stmt->impRowDesc);
+  stmt->rowsFetchedPtr = ird->rowsProcessedPtr;
+  stmt->rowStatusPtr = ird->arrayStatusPtr;
+  stmt->columnBindings.assign(static_cast<size_t>(ard->count) + 1, BindColInfo());
+  for (int number = 1; number <= ard->count; ++number) {
+    const DescriptorRecord* record = ard->findRecord(number);
+    if (!record)
+      continue;
+    BindColInfo& binding = stmt->columnBindings[static_cast<size_t>(number)];
+    binding.targetType = record->conciseType == SQL_C_DEFAULT && stmt->resultSetPtr
+                             ? stmt->resultSetPtr->getDefaultCTypeForColumn(number)
+                             : record->conciseType;
+    binding.targetValuePtr = record->dataPtr;
+    binding.bufferLength = record->octetLength;
+    binding.strLen_or_IndPtr = record->indicatorPtr ? record->indicatorPtr : record->octetLengthPtr;
+    binding.isBound = record->dataPtr != nullptr || binding.strLen_or_IndPtr != nullptr;
+  }
+  if (stmt->resultSetPtr)
+    stmt->resultSetPtr->bindColInfo = stmt->columnBindings;
+}
+
+SQLRETURN fillColBindBuffer(StatementHandle* stmt, SQLUSMALLINT col, const ODBCField& value,
+                            SQLULEN rowsetIndex) {
   BindColInfo* binding = stmt->resultSetPtr->getBindColInfo(col);
   if (!binding || !binding->isBound) {
     return SQL_ERROR;
   }
   ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
+  const SQLULEN offset = stmt->rowBindOffsetPtr ? *stmt->rowBindOffsetPtr : 0;
+  const size_t valueStride = stmt->rowBindType == SQL_BIND_BY_COLUMN
+                                 ? CTypeSize(binding->targetType, binding->bufferLength)
+                                 : static_cast<size_t>(stmt->rowBindType);
+  const size_t indicatorStride = stmt->rowBindType == SQL_BIND_BY_COLUMN
+                                     ? sizeof(SQLLEN)
+                                     : static_cast<size_t>(stmt->rowBindType);
+  SQLPOINTER target = binding->targetValuePtr
+                          ? static_cast<void*>(static_cast<char*>(binding->targetValuePtr) +
+                                               offset + rowsetIndex * valueStride)
+                          : nullptr;
+  const auto* record = static_cast<DescriptorHandle*>(stmt->appRowDesc)->findRecord(col);
+  auto pointerAt = [&](SQLLEN* pointer) -> SQLLEN* {
+    return pointer ? reinterpret_cast<SQLLEN*>(reinterpret_cast<char*>(pointer) + offset +
+                                               rowsetIndex * indicatorStride)
+                   : nullptr;
+  };
+  SQLLEN* indicator = pointerAt(record->indicatorPtr);
+  SQLLEN* octetLength = pointerAt(record->octetLengthPtr);
 
   if (value.isNull()) {
-    if (binding->strLen_or_IndPtr) {
-      *binding->strLen_or_IndPtr = SQL_NULL_DATA;
+    if (indicator) {
+      *indicator = SQL_NULL_DATA;
     } else {
       stmt->addDiagnostic("22002", "Indicator variable required but not supplied");
       return SQL_ERROR;
     }
 
-    if (binding->targetValuePtr && binding->bufferLength > 0) {
+    if (target && binding->bufferLength > 0) {
       if (binding->targetType == SQL_C_CHAR) {
-        static_cast<char*>(binding->targetValuePtr)[0] = '\0';
-      } else if (binding->targetType == SQL_C_WCHAR) {
-        static_cast<SQLWCHAR*>(binding->targetValuePtr)[0] = 0;
+        static_cast<char*>(target)[0] = '\0';
+      } else if (binding->targetType == SQL_C_WCHAR &&
+                 binding->bufferLength >= static_cast<SQLLEN>(sizeof(SQLWCHAR))) {
+        static_cast<SQLWCHAR*>(target)[0] = 0;
       }
     }
     return SQL_SUCCESS;
   }
 
-  return CopyFieldToTarget(stmt, value, binding->targetType, binding->targetValuePtr,
-                           binding->bufferLength, binding->strLen_or_IndPtr, true, col);
+  SQLLEN length = 0;
+  SQLRETURN result = CopyFieldToTarget(stmt, value, binding->targetType, target,
+                                       binding->bufferLength, &length, true, col);
+  if (SQL_SUCCEEDED(result)) {
+    if (indicator && indicator != octetLength)
+      *indicator = 0;
+    if (octetLength)
+      *octetLength = length;
+  }
+  return result;
 }
 
 SQLRETURN SQL_API SQLFetch(SQLHSTMT statementHandle) {
@@ -2450,6 +3084,19 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT statementHandle) {
     logMessage(cnct, "SQLFetch: Invalid statement handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
+  stmt->clearDiagnostics();
+  SyncColumnBindingsFromDescriptor(stmt);
+  stmt->lastGetDataRow = -1;
+  stmt->lastGetDataCol = 0;
+  stmt->getDataOffsets.clear();
+  if (stmt->rowsFetchedPtr)
+    *stmt->rowsFetchedPtr = 0;
+  if (stmt->rowStatusPtr) {
+    for (SQLULEN index = 0; index < stmt->rowArraySize; ++index)
+      stmt->rowStatusPtr[index] = SQL_ROW_NOROW;
+  }
+  if (stmt->maxRows > 0 && stmt->rowsReturned >= stmt->maxRows)
+    return SQL_NO_DATA;
 
   if (stmt->resultSetPtr == nullptr) {
     logMessage(cnct, "SQLFetch: No result set available", LOG_LEVEL_ERROR);
@@ -2457,80 +3104,49 @@ SQLRETURN SQL_API SQLFetch(SQLHSTMT statementHandle) {
     return SQL_ERROR;
   }
 
-  // Progress to the next row
-  stmt->curRow = (stmt->curRow < 0) ? 0 : (stmt->curRow + 1);
-  logMessage(cnct, "SQLFetch: Moving to row " + std::to_string(stmt->curRow), LOG_LEVEL_DEBUG);
-
-  // If we've reached the end, check if we can load more data
-  if (stmt->curRow == stmt->resultSetPtr->getNumRows()) {
-    logMessage(cnct, "SQLFetch: Reached end of current result set", LOG_LEVEL_DEBUG);
-
-    // Choose streaming method based on API type
-    if (cnct->useRestful) {
-      // REST API: fetch next batch from server by modifying SQL query
-      logMessage(cnct, "SQLFetch: Fetching next batch using REST API streaming", LOG_LEVEL_DEBUG);
-      SQLSMALLINT ret = streamNextBatch(stmt);
-      if (ret == SQL_NO_DATA) {
-        logMessage(cnct, "SQLFetch: No data available from REST API streaming", LOG_LEVEL_INFO);
-        return ret;
-      }
-      if (ret != SQL_SUCCESS) {
-        logMessage(cnct,
-                   "SQLFetch: Failed to fetch next batch from REST API with code: " +
-                       std::to_string(ret),
-                   LOG_LEVEL_ERROR);
-        return ret;
-      }
+  SQLULEN fetched = 0;
+  SQLULEN failed = 0;
+  SQLRETURN overall = SQL_SUCCESS;
+  while (fetched < stmt->rowArraySize &&
+         (stmt->maxRows == 0 || stmt->rowsReturned < stmt->maxRows)) {
+    stmt->curRow = stmt->curRow < 0 ? 0 : stmt->curRow + 1;
+    if (stmt->curRow == stmt->resultSetPtr->getNumRows()) {
+      const SQLSMALLINT streamResult = streamNextBatch(stmt);
+      if (streamResult == SQL_NO_DATA)
+        break;
+      if (streamResult != SQL_SUCCESS)
+        return streamResult;
       stmt->curRow = 0;
-      logMessage(cnct, "SQLFetch: Reset to first row of new REST batch", LOG_LEVEL_DEBUG);
-    } else {
-      // Session API: load next batch from existing SessionDataSet
-      logMessage(cnct, "SQLFetch: Loading next batch from Session API", LOG_LEVEL_DEBUG);
-      SQLSMALLINT ret = streamNextBatch(stmt);
-      if (ret == SQL_NO_DATA) {
-        logMessage(cnct, "SQLFetch: No data available from Session API streaming", LOG_LEVEL_INFO);
-        return ret;
+    }
+    if (stmt->curRow < 0 || stmt->curRow >= stmt->resultSetPtr->getNumRows())
+      break;
+
+    SQLRETURN rowResult = SQL_SUCCESS;
+    for (SQLUSMALLINT col = 1; col <= stmt->resultSetPtr->getNumColumns(); ++col) {
+      BindColInfo* binding = stmt->resultSetPtr->getBindColInfo(col);
+      if (!binding || !binding->isBound)
+        continue;
+      const ODBCField& value = stmt->resultSetPtr->getValue(stmt->curRow, col - 1);
+      const SQLRETURN result = fillColBindBuffer(stmt, col, value, fetched);
+      if (result != SQL_SUCCESS && result != SQL_SUCCESS_WITH_INFO) {
+        rowResult = SQL_ERROR;
+        overall = SQL_SUCCESS_WITH_INFO;
+        ++failed;
+        break;
       }
-      if (ret != SQL_SUCCESS) {
-        logMessage(cnct,
-                   "SQLFetch: Failed to fetch next batch from Session API with code: " +
-                       std::to_string(ret),
-                   LOG_LEVEL_ERROR);
-        return ret;
-      }
-      stmt->curRow = 0;
-      logMessage(cnct, "SQLFetch: Reset to first row of new Session batch", LOG_LEVEL_DEBUG);
+      if (result == SQL_SUCCESS_WITH_INFO)
+        rowResult = overall = SQL_SUCCESS_WITH_INFO;
     }
+    if (stmt->rowStatusPtr)
+      stmt->rowStatusPtr[fetched] = rowResult == SQL_ERROR               ? SQL_ROW_ERROR
+                                    : rowResult == SQL_SUCCESS_WITH_INFO ? SQL_ROW_SUCCESS_WITH_INFO
+                                                                         : SQL_ROW_SUCCESS;
+    ++fetched;
+    ++stmt->rowsReturned;
   }
-
-  // col = 0 refers to bookmark column, which IoTDB don't have one, so it's skipped.
-  for (SQLUSMALLINT col = 1; col <= stmt->resultSetPtr->getNumColumns(); ++col) {
-    BindColInfo* binding = stmt->resultSetPtr->getBindColInfo(col);
-
-    if (!binding || !binding->isBound) {
-      logMessage(cnct, "SQLFetch: Column " + std::to_string(col) + " is not bound, skipping",
-                 LOG_LEVEL_DEBUG);
-      continue;
-    }
-
-    const ODBCField& value = stmt->resultSetPtr->getValue(stmt->curRow, col - 1);
-    logMessage(cnct, "SQLFetch: Using string data for column " + std::to_string(col),
-               LOG_LEVEL_DEBUG);
-    SQLRETURN rc = fillColBindBuffer(stmt, col, value);
-
-    if (rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO) {
-      stmt->addDiagnostic("01000", "Error occurred when filling the buffer");
-      logMessage(cnct, "SQLFetch: Data conversion failed for column " + std::to_string(col),
-                 LOG_LEVEL_ERROR);
-      return rc;
-    }
-
-    logMessage(cnct, "SQLFetch: Successfully filled buffer for column " + std::to_string(col),
-               LOG_LEVEL_DEBUG);
-  }
-
-  logMessage(cnct, "SQLFetch: Exiting successfully", LOG_LEVEL_TRACE);
-  return SQL_SUCCESS;
+  if (stmt->rowsFetchedPtr)
+    *stmt->rowsFetchedPtr = fetched;
+  return fetched == 0 ? SQL_NO_DATA : failed == fetched ? SQL_ERROR : overall;
 }
 
 SQLRETURN SQL_API SQLFetchScroll(SQLHSTMT statementHandle, SQLSMALLINT fetchOrientation,
@@ -2540,20 +3156,16 @@ SQLRETURN SQL_API SQLFetchScroll(SQLHSTMT statementHandle, SQLSMALLINT fetchOrie
     return SQL_INVALID_HANDLE;
   }
   auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLFetchScroll is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLFetchScroll Function not implemented");
-  }
+  stmt->clearDiagnostics();
+  (void)fetchOffset;
+  if (fetchOrientation == SQL_FETCH_NEXT)
+    return SQLFetch(statementHandle);
+  stmt->addDiagnostic("HYC00", "Only forward SQL_FETCH_NEXT is supported");
   return SQL_ERROR;
 }
 
 SQLRETURN SQL_API SQLFreeConnect(SQLHDBC connectionHandle) {
   logMessage("SQLFreeConnect");
-  auto cnct = static_cast<ConnectionHandle*>(connectionHandle);
-  if (cnct) {
-    cnct->CloseSession();
-  }
   SQLRETURN retcode = SQLFreeHandle(SQL_HANDLE_DBC, connectionHandle);
   if (retcode != SQL_SUCCESS && retcode != SQL_SUCCESS_WITH_INFO) {
     std::ostringstream oss;
@@ -2596,10 +3208,21 @@ SQLRETURN SQL_API SQLFreeHandle(SQLSMALLINT handleType, SQLHANDLE handle) {
   // Convert handle to ODBCHandle type
   ODBCHandle* odbcHandle = static_cast<ODBCHandle*>(handle);
 
+  if (odbcHandle->getHandleType() != handleType) {
+    logMessage("SQLFreeHandle: handle type does not match the allocated handle.");
+    return SQL_INVALID_HANDLE;
+  }
+
   // Check if handle has already been freed
   if (odbcHandle->isHandleFreed()) {
     logMessage("SQLFreeHandle: handle is already freed.");
     return SQL_SUCCESS; // Handle already freed, return success directly
+  }
+
+  if (handleType == SQL_HANDLE_DESC && static_cast<DescriptorHandle*>(handle)->implicit) {
+    odbcHandle->clearDiagnostics();
+    odbcHandle->addDiagnostic("HY017", "Invalid use of an automatically allocated descriptor");
+    return SQL_ERROR;
   }
 
   // Mark handle as freed
@@ -2620,6 +3243,17 @@ SQLRETURN SQL_API SQLFreeHandle(SQLSMALLINT handleType, SQLHANDLE handle) {
   case SQL_HANDLE_STMT: {
     logMessage("SQLFreeHandle: freeing statement handle.");
     delete static_cast<StatementHandle*>(handle);
+    break;
+  }
+  case SQL_HANDLE_DESC: {
+    auto* descriptor = static_cast<DescriptorHandle*>(handle);
+    for (auto* statement : descriptor->connection->statements) {
+      if (statement->appRowDesc == descriptor)
+        statement->appRowDesc = statement->implicitAppRowDesc;
+      if (statement->appParamDesc == descriptor)
+        statement->appParamDesc = statement->implicitAppParamDesc;
+    }
+    delete descriptor;
     break;
   }
   default: {
@@ -2648,6 +3282,7 @@ SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statementHandle, SQLUSMALLINT option) {
     logMessage(cnct, "SQLFreeStmt: Invalid statement handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
+  stmt->clearDiagnostics();
 
   switch (option) {
   case SQL_CLOSE: {
@@ -2665,15 +3300,28 @@ SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statementHandle, SQLUSMALLINT option) {
     if (stmt->resultSetPtr) {
       stmt->resultSetPtr->unbindColumns();
     }
+    stmt->columnBindings.clear();
+    auto* ard = static_cast<DescriptorHandle*>(stmt->appRowDesc);
+    ard->records.clear();
+    ard->count = 0;
     logMessage(cnct, "SQLFreeStmt: Column bindings released", LOG_LEVEL_DEBUG);
     break;
   }
 
   case SQL_RESET_PARAMS: {
     logMessage(cnct, "SQLFreeStmt: Processing SQL_RESET_PARAMS option", LOG_LEVEL_DEBUG);
-    // Unbind parameters (not yet supported)
-    logMessage(cnct, "SQLFreeStmt: Parameter reset requested but not supported yet",
-               LOG_LEVEL_WARN);
+    stmt->parameterBindings.clear();
+    stmt->needsParameterData = false;
+    stmt->nextDataSet = 0;
+    stmt->activeDataSet = std::numeric_limits<SQLULEN>::max();
+    stmt->nextDataParameter = 0;
+    stmt->activeDataParameter = std::numeric_limits<size_t>::max();
+    auto* apd = static_cast<DescriptorHandle*>(stmt->appParamDesc);
+    apd->records.clear();
+    apd->count = 0;
+    auto* ipd = static_cast<DescriptorHandle*>(stmt->impParamDesc);
+    ipd->records.clear();
+    ipd->count = 0;
     break;
   }
 
@@ -2682,7 +3330,7 @@ SQLRETURN SQL_API SQLFreeStmt(SQLHSTMT statementHandle, SQLUSMALLINT option) {
     // This option is deprecated in ODBC 3.0, recommend using SQLFreeHandle instead
     logMessage(cnct, "SQLFreeStmt: SQL_DROP is deprecated in ODBC 3.0, use SQLFreeHandle instead",
                LOG_LEVEL_WARN);
-    break;
+    return SQLFreeHandle(SQL_HANDLE_STMT, statementHandle);
   }
 
   default: {
@@ -2718,6 +3366,7 @@ SQLRETURN SQL_API SQLGetConnectAttr(SQLHDBC connectionHandle, SQLINTEGER attribu
     logMessage(cnct, "SQLGetConnectAttr: Invalid connection handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
+  cnct->clearDiagnostics();
 
   switch (attribute) {
   // Connection metadata attributes
@@ -2740,11 +3389,16 @@ SQLRETURN SQL_API SQLGetConnectAttr(SQLHDBC connectionHandle, SQLINTEGER attribu
     }
     break;
 
+  case SQL_ATTR_LOGIN_TIMEOUT:
+    if (valuePtr)
+      *static_cast<SQLUINTEGER*>(valuePtr) = cnct->timeoutLogin;
+    break;
+
   // Transaction control attributes
   case SQL_ATTR_AUTOCOMMIT:
     logMessage(cnct, "SQLGetConnectAttr: Processing SQL_ATTR_AUTOCOMMIT", LOG_LEVEL_DEBUG);
     if (valuePtr) {
-      *((SQLUINTEGER*)valuePtr) = SQL_AUTOCOMMIT_ON; // Default to auto-commit
+      *((SQLUINTEGER*)valuePtr) = cnct->autoCommit ? SQL_AUTOCOMMIT_ON : SQL_AUTOCOMMIT_OFF;
       logMessage(cnct, "SQLGetConnectAttr: Auto-commit set to ON", LOG_LEVEL_DEBUG);
     }
     break;
@@ -2752,26 +3406,33 @@ SQLRETURN SQL_API SQLGetConnectAttr(SQLHDBC connectionHandle, SQLINTEGER attribu
   case SQL_ATTR_TXN_ISOLATION:
     logMessage(cnct, "SQLGetConnectAttr: Processing SQL_ATTR_TXN_ISOLATION", LOG_LEVEL_DEBUG);
     if (valuePtr) {
-      *((SQLUINTEGER*)valuePtr) = SQL_TXN_READ_COMMITTED; // Default isolation level
-      logMessage(cnct, "SQLGetConnectAttr: Transaction isolation set to READ_COMMITTED",
-                 LOG_LEVEL_DEBUG);
+      *((SQLUINTEGER*)valuePtr) = 0; // SQL_TXN_CAPABLE is SQL_TC_NONE.
     }
     break;
 
   // Catalog/schema attributes
   case SQL_ATTR_CURRENT_CATALOG:
     logMessage(cnct, "SQLGetConnectAttr: Processing SQL_ATTR_CURRENT_CATALOG", LOG_LEVEL_DEBUG);
-    if (valuePtr && bufferLength > 0) {
-      const char* currentDb = (cnct->database).c_str();
-      strncpy((char*)valuePtr, currentDb, bufferLength - 1);
-      ((char*)valuePtr)[bufferLength - 1] = '\0';
-      if (stringLength) {
-        *stringLength = strlen(currentDb);
+    {
+      const SQLINTEGER requiredLength = static_cast<SQLINTEGER>(cnct->database.size());
+      if (stringLength)
+        *stringLength = requiredLength;
+      if (!valuePtr)
+        break;
+      if (bufferLength <= 0) {
+        cnct->addDiagnostic("HY090", "Invalid string or buffer length");
+        return SQL_ERROR;
       }
-      logMessage(cnct, "SQLGetConnectAttr: Current catalog set to " + cnct->database,
-                 LOG_LEVEL_DEBUG);
+      const size_t copyLength =
+          std::min(cnct->database.size(), static_cast<size_t>(bufferLength - 1));
+      std::memcpy(valuePtr, cnct->database.data(), copyLength);
+      static_cast<char*>(valuePtr)[copyLength] = '\0';
+      if (copyLength < cnct->database.size()) {
+        cnct->addDiagnostic("01004", "String data, right truncated");
+        return SQL_SUCCESS_WITH_INFO;
+      }
+      break;
     }
-    break;
 
   // ODBC behavior control attributes
   case SQL_ATTR_ODBC_CURSORS:
@@ -2797,10 +3458,8 @@ SQLRETURN SQL_API SQLGetConnectAttr(SQLHDBC connectionHandle, SQLINTEGER attribu
     return SQL_ERROR;
   }
 
-  // Update StringLength if required
-  if (stringLength) {
-    *stringLength = 0; // Update with actual size if applicable
-  }
+  if (stringLength && attribute != SQL_ATTR_CURRENT_CATALOG)
+    *stringLength = 0;
 
   logMessage(cnct, "SQLGetConnectAttr: Exiting successfully", LOG_LEVEL_TRACE);
   return SQL_SUCCESS;
@@ -2812,12 +3471,24 @@ SQLRETURN SQL_API SQLGetConnectOption(SQLHDBC connectionHandle, SQLUSMALLINT opt
     logMessage(nullptr, "SQLGetConnectOption: Invalid connection handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
-  const auto cnct = static_cast<ConnectionHandle*>(connectionHandle);
-  logMessage(cnct, "SQLGetConnectOption is not implemented", LOG_LEVEL_ERROR);
-  if (cnct) {
-    cnct->addDiagnostic("IM001", "SQLGetConnectOption Function not implemented");
+  switch (option) {
+  case SQL_ACCESS_MODE:
+    return SQLGetConnectAttr(connectionHandle, SQL_ATTR_ACCESS_MODE, value, 0, nullptr);
+  case SQL_AUTOCOMMIT:
+    return SQLGetConnectAttr(connectionHandle, SQL_ATTR_AUTOCOMMIT, value, 0, nullptr);
+  case SQL_LOGIN_TIMEOUT:
+    return SQLGetConnectAttr(connectionHandle, SQL_ATTR_LOGIN_TIMEOUT, value, 0, nullptr);
+  case SQL_TXN_ISOLATION:
+    return SQLGetConnectAttr(connectionHandle, SQL_ATTR_TXN_ISOLATION, value, 0, nullptr);
+  case SQL_CURRENT_QUALIFIER:
+    return SQLGetConnectAttr(connectionHandle, SQL_ATTR_CURRENT_CATALOG, value,
+                             SQL_MAX_OPTION_STRING_LENGTH, nullptr);
+  default:
+    auto* cnct = static_cast<ConnectionHandle*>(connectionHandle);
+    cnct->clearDiagnostics();
+    cnct->addDiagnostic("HY092", "Invalid attribute/option identifier");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
 }
 
 SQLRETURN SQL_API SQLGetCursorName(SQLHSTMT statementHandle, SQLCHAR* cursorName,
@@ -2827,15 +3498,18 @@ SQLRETURN SQL_API SQLGetCursorName(SQLHSTMT statementHandle, SQLCHAR* cursorName
     return SQL_INVALID_HANDLE;
   }
   auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLGetCursorName is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLGetCursorName Function not implemented");
+  stmt->clearDiagnostics();
+  if (bufferLength < 0) {
+    stmt->addDiagnostic("HY090", "Invalid string or buffer length");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  SQLRETURN result = setString(stmt->cursorName, cursorName, bufferLength, nameLengthPtr);
+  if (result == SQL_SUCCESS_WITH_INFO)
+    stmt->addDiagnostic("01004", "Cursor name was truncated");
+  return result;
 }
 
-// Currently still using JSON format to get data. TODO: Modify after optimizing storage format.
+// REST responses are decoded from the server's JSON result representation.
 SQLRETURN SQL_API SQLGetData(const SQLHSTMT statementHandle, const SQLUSMALLINT columnNumber,
                              const SQLSMALLINT targetType, const SQLPOINTER targetValue,
                              const SQLLEN bufferLength, SQLLEN* strLenOrInd) {
@@ -2860,12 +3534,21 @@ SQLRETURN SQL_API SQLGetData(const SQLHSTMT statementHandle, const SQLUSMALLINT 
     logMessage(cnct, "SQLGetData: Invalid statement handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
+  stmt->clearDiagnostics();
+  if (!stmt->resultSetPtr || stmt->curRow < 0 || stmt->curRow >= stmt->resultSetPtr->getNumRows()) {
+    stmt->addDiagnostic("24000", "Invalid cursor state");
+    return SQL_ERROR;
+  }
+  if (columnNumber == 0 || columnNumber > stmt->resultSetPtr->getNumColumns()) {
+    stmt->addDiagnostic("07009", "Invalid descriptor index");
+    return SQL_ERROR;
+  }
+  if (bufferLength < 0) {
+    stmt->addDiagnostic("HY090", "Invalid string or buffer length");
+    return SQL_ERROR;
+  }
 
   logMessage(cnct, "SQLGetData: stmt->curRow = " + std::to_string(stmt->curRow), LOG_LEVEL_TRACE);
-  if (stmt->curRow < 0) {
-    logMessage(cnct, "SQLGetData: Current row is negative, setting to 0", LOG_LEVEL_WARN);
-    stmt->curRow = 0;
-  }
 
   if (stmt->curRow != stmt->lastGetDataRow) {
     stmt->lastGetDataRow = stmt->curRow;
@@ -2909,12 +3592,6 @@ SQLRETURN SQL_API SQLGetData(const SQLHSTMT statementHandle, const SQLUSMALLINT 
     return SQL_ERROR;
   }
 
-  if (isLogLevelEnabled(cnct, LOG_LEVEL_DEBUG)) {
-    std::stringstream logStream;
-    logStream << "SQLGetData: Retrieved value = " << valuePtr->toString();
-    logMessage(cnct, logStream.str(), LOG_LEVEL_DEBUG);
-  }
-
   if (columnNumber != stmt->lastGetDataCol &&
       stmt->getDataOffsets.size() > static_cast<size_t>(columnNumber)) {
     stmt->getDataOffsets[columnNumber] = 0;
@@ -2952,16 +3629,131 @@ SQLRETURN SQL_API SQLGetData(const SQLHSTMT statementHandle, const SQLUSMALLINT 
 SQLRETURN SQL_API SQLGetDescField(SQLHDESC descriptorHandle, SQLSMALLINT recNumber,
                                   SQLSMALLINT fieldIdentifier, SQLPOINTER value,
                                   SQLINTEGER bufferLength, SQLINTEGER* stringLength) {
-  if (!descriptorHandle) {
-    logMessage(nullptr, "SQLGetDescField: Invalid descriptor handle", LOG_LEVEL_ERROR);
+  if (!descriptorHandle)
     return SQL_INVALID_HANDLE;
+  auto* descriptor = static_cast<DescriptorHandle*>(descriptorHandle);
+  if (descriptor->getHandleType() != SQL_HANDLE_DESC)
+    return SQL_INVALID_HANDLE;
+  descriptor->clearDiagnostics();
+
+  auto setStringField = [&](const std::string& text) -> SQLRETURN {
+    if (stringLength)
+      *stringLength = static_cast<SQLINTEGER>(text.size());
+    if (!value)
+      return SQL_SUCCESS;
+    if (bufferLength < 0) {
+      descriptor->addDiagnostic("HY090", "Invalid string or buffer length");
+      return SQL_ERROR;
+    }
+    if (bufferLength == 0)
+      return text.empty() ? SQL_SUCCESS : SQL_SUCCESS_WITH_INFO;
+    const size_t copied = std::min(text.size(), static_cast<size_t>(bufferLength - 1));
+    std::memcpy(value, text.data(), copied);
+    static_cast<char*>(value)[copied] = '\0';
+    return copied < text.size() ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
+  };
+  auto setSmallInt = [&](SQLSMALLINT result) {
+    if (value)
+      *static_cast<SQLSMALLINT*>(value) = result;
+    if (stringLength)
+      *stringLength = sizeof(SQLSMALLINT);
+    return SQL_SUCCESS;
+  };
+  auto setLength = [&](SQLLEN result) {
+    if (value)
+      *static_cast<SQLLEN*>(value) = result;
+    if (stringLength)
+      *stringLength = sizeof(SQLLEN);
+    return SQL_SUCCESS;
+  };
+  auto setUnsignedLength = [&](SQLULEN result) {
+    if (value)
+      *static_cast<SQLULEN*>(value) = result;
+    if (stringLength)
+      *stringLength = sizeof(SQLULEN);
+    return SQL_SUCCESS;
+  };
+  auto setPointer = [&](SQLPOINTER result) {
+    if (value)
+      *static_cast<SQLPOINTER*>(value) = result;
+    if (stringLength)
+      *stringLength = sizeof(SQLPOINTER);
+    return SQL_SUCCESS;
+  };
+
+  switch (fieldIdentifier) {
+  case SQL_DESC_ALLOC_TYPE:
+    return setSmallInt(descriptor->implicit ? SQL_DESC_ALLOC_AUTO : SQL_DESC_ALLOC_USER);
+  case SQL_DESC_ARRAY_SIZE:
+    return setUnsignedLength(descriptor->arraySize);
+  case SQL_DESC_ARRAY_STATUS_PTR:
+    return setPointer(descriptor->arrayStatusPtr);
+  case SQL_DESC_BIND_OFFSET_PTR:
+    return setPointer(descriptor->bindOffsetPtr);
+  case SQL_DESC_BIND_TYPE:
+    return setUnsignedLength(descriptor->bindType);
+  case SQL_DESC_COUNT:
+    return setSmallInt(descriptor->count);
+  case SQL_DESC_ROWS_PROCESSED_PTR:
+    return setPointer(descriptor->rowsProcessedPtr);
+  default:
+    break;
   }
-  logMessage(nullptr, "SQLGetDescField is not implemented", LOG_LEVEL_ERROR);
-  if (descriptorHandle) {
-    auto odbcHandle = static_cast<ODBCHandle*>(descriptorHandle);
-    odbcHandle->addDiagnostic("IM001", "SQLGetDescField Function not implemented");
+
+  if (descriptor->role == DescriptorRole::IMPLEMENTATION_ROW && descriptor->owner &&
+      !descriptor->owner->resultSetPtr) {
+    descriptor->addDiagnostic("HY007", "Associated statement is not prepared or executed");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+
+  if (recNumber < 0) {
+    descriptor->addDiagnostic("07009", "Invalid descriptor index");
+    return SQL_ERROR;
+  }
+  if (recNumber == 0 || recNumber > descriptor->count)
+    return SQL_NO_DATA;
+  const DescriptorRecord* record = descriptor->findRecord(recNumber);
+  if (!record)
+    return SQL_NO_DATA;
+  switch (fieldIdentifier) {
+  case SQL_DESC_CONCISE_TYPE:
+    return setSmallInt(record->conciseType);
+  case SQL_DESC_TYPE:
+    return setSmallInt(record->type);
+  case SQL_DESC_DATETIME_INTERVAL_CODE:
+    return setSmallInt(record->datetimeIntervalCode);
+  case SQL_DESC_OCTET_LENGTH:
+    return setLength(record->octetLength);
+  case SQL_DESC_LENGTH:
+    return setUnsignedLength(record->length);
+  case SQL_DESC_PRECISION:
+    return setSmallInt(record->precision);
+  case SQL_DESC_SCALE:
+    return setSmallInt(record->scale);
+  case SQL_DESC_NULLABLE:
+    return setSmallInt(record->nullable);
+  case SQL_DESC_PARAMETER_TYPE:
+    return setSmallInt(record->parameterType);
+  case SQL_DESC_UNNAMED:
+    return setSmallInt(record->unnamed);
+  case SQL_DESC_NUM_PREC_RADIX:
+    if (value)
+      *static_cast<SQLINTEGER*>(value) = record->numPrecRadix;
+    if (stringLength)
+      *stringLength = sizeof(SQLINTEGER);
+    return SQL_SUCCESS;
+  case SQL_DESC_DATA_PTR:
+    return setPointer(record->dataPtr);
+  case SQL_DESC_INDICATOR_PTR:
+    return setPointer(record->indicatorPtr);
+  case SQL_DESC_OCTET_LENGTH_PTR:
+    return setPointer(record->octetLengthPtr);
+  case SQL_DESC_NAME:
+    return setStringField(record->name);
+  default:
+    descriptor->addDiagnostic("HY091", "Invalid descriptor field identifier");
+    return SQL_ERROR;
+  }
 }
 
 SQLRETURN SQL_API SQLGetDescRec(SQLHDESC descriptorHandle, SQLSMALLINT recNumber, SQLCHAR* name,
@@ -2969,181 +3761,145 @@ SQLRETURN SQL_API SQLGetDescRec(SQLHDESC descriptorHandle, SQLSMALLINT recNumber
                                 SQLSMALLINT* typePtr, SQLSMALLINT* subTypePtr, SQLLEN* lengthPtr,
                                 SQLSMALLINT* precisionPtr, SQLSMALLINT* scalePtr,
                                 SQLSMALLINT* nullablePtr) {
-  if (!descriptorHandle) {
-    logMessage(nullptr, "SQLGetDescRec: Invalid descriptor handle", LOG_LEVEL_ERROR);
+  if (!descriptorHandle)
     return SQL_INVALID_HANDLE;
+  auto* descriptor = static_cast<DescriptorHandle*>(descriptorHandle);
+  if (descriptor->getHandleType() != SQL_HANDLE_DESC)
+    return SQL_INVALID_HANDLE;
+  descriptor->clearDiagnostics();
+  if (descriptor->role == DescriptorRole::IMPLEMENTATION_ROW && descriptor->owner &&
+      !descriptor->owner->resultSetPtr) {
+    descriptor->addDiagnostic("HY007", "Associated statement is not prepared or executed");
+    return SQL_ERROR;
   }
-  logMessage(nullptr, "SQLGetDescRec is not implemented", LOG_LEVEL_ERROR);
-  if (descriptorHandle) {
-    auto odbcHandle = static_cast<ODBCHandle*>(descriptorHandle);
-    odbcHandle->addDiagnostic("IM001", "SQLGetDescRec Function not implemented");
+  if (recNumber < 1) {
+    descriptor->addDiagnostic("07009", "Invalid descriptor index");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  const DescriptorRecord* record = descriptor->findRecord(recNumber);
+  if (!record || recNumber > descriptor->count)
+    return SQL_NO_DATA;
+  SQLINTEGER nameLength32 = 0;
+  SQLRETURN result = SQLGetDescField(descriptorHandle, recNumber, SQL_DESC_NAME, name, bufferLength,
+                                     &nameLength32);
+  if (stringLengthPtr)
+    *stringLengthPtr = static_cast<SQLSMALLINT>(std::min<SQLINTEGER>(nameLength32, SHRT_MAX));
+  if (typePtr)
+    *typePtr = record->type;
+  if (subTypePtr)
+    *subTypePtr = record->datetimeIntervalCode;
+  if (lengthPtr)
+    *lengthPtr = static_cast<SQLLEN>(record->length);
+  if (precisionPtr)
+    *precisionPtr = record->precision;
+  if (scalePtr)
+    *scalePtr = record->scale;
+  if (nullablePtr)
+    *nullablePtr = record->nullable;
+  return result;
 }
 
 SQLRETURN SQL_API SQLGetDiagField(const SQLSMALLINT handleType, const SQLHANDLE handle,
                                   const SQLSMALLINT recNumber, const SQLSMALLINT diagIdentifier,
                                   const SQLPOINTER diagInfoPtr, const SQLSMALLINT bufferLength,
                                   SQLSMALLINT* stringLengthPtr) {
-  ConnectionHandle* cnct = nullptr;
-  if (handleType == SQL_HANDLE_DBC && handle) {
-    cnct = static_cast<ConnectionHandle*>(handle);
-  } else if (handleType == SQL_HANDLE_STMT && handle) {
-    const auto stmt = static_cast<StatementHandle*>(handle);
-    cnct = stmt->getConnection();
-  }
-  // Log entry into SQLGetDiagField
-  logMessage("Entering SQLGetDiagField");
-
-  // Prepare a log message for the parameters
-  std::stringstream logStream;
-  logStream << "Parameters: "
-            << "handleType = " << handleType << ", handle = " << handleToString(handle)
-            << ", recNumber = " << recNumber << ", diagIdentifier = " << diagIdentifier
-            << ", bufferLength = " << bufferLength;
-  logMessage(logStream.str());
-
+  if (!handle)
+    return SQL_INVALID_HANDLE;
   auto* odbcHandle = static_cast<ODBCHandle*>(handle);
-  std::string sqlState, message;
-  int nativeError;
+  if (odbcHandle->getHandleType() != handleType)
+    return SQL_INVALID_HANDLE;
+  if (bufferLength < 0)
+    return SQL_ERROR;
 
-  const auto diagnostic = odbcHandle->getDiagnostic(recNumber, sqlState, message, nativeError);
-  if (!diagnostic) {
-    logMessage("Exiting SQLGetDiagField: Couldn't find diagnostic information\n");
-    return SQL_NO_DATA;
+  if (diagIdentifier == SQL_DIAG_NUMBER) {
+    if (recNumber != 0)
+      return SQL_ERROR;
+    if (diagInfoPtr)
+      *static_cast<SQLINTEGER*>(diagInfoPtr) =
+          static_cast<SQLINTEGER>(odbcHandle->diagnosticCount());
+    if (stringLengthPtr)
+      *stringLengthPtr = sizeof(SQLINTEGER);
+    return SQL_SUCCESS;
   }
+  if (recNumber <= 0)
+    return SQL_ERROR;
 
-  // Dummy responses for some common DiagIdentifiers
+  std::string sqlState;
+  std::string message;
+  int nativeError = 0;
+  if (!odbcHandle->getDiagnostic(recNumber, sqlState, message, nativeError))
+    return SQL_NO_DATA;
+
   switch (diagIdentifier) {
   case SQL_DIAG_SQLSTATE:
-    if (diagInfoPtr && bufferLength > 0) {
-      std::snprintf(static_cast<char*>(diagInfoPtr), bufferLength, "%s", sqlState.c_str());
-      if (stringLengthPtr) {
-        *stringLengthPtr = static_cast<SQLSMALLINT>(sqlState.length());
-      }
-      logMessage("SQLGetDiagField returning SQL_DIAG_SQLSTATE = " + sqlState);
-    }
-    break;
-
+    return setString(sqlState, diagInfoPtr, bufferLength, stringLengthPtr);
   case SQL_DIAG_NATIVE:
-    if (diagInfoPtr) {
-      *static_cast<SQLINTEGER*>(diagInfoPtr) = 0; // No error
-      logMessage("SQLGetDiagField returning SQL_DIAG_NATIVE = 0");
-    }
-    break;
-
+    if (diagInfoPtr)
+      *static_cast<SQLINTEGER*>(diagInfoPtr) = nativeError;
+    if (stringLengthPtr)
+      *stringLengthPtr = sizeof(SQLINTEGER);
+    return SQL_SUCCESS;
   case SQL_DIAG_MESSAGE_TEXT:
-    if (diagInfoPtr && bufferLength > 0) {
-      std::snprintf(static_cast<char*>(diagInfoPtr), bufferLength, "%s", message.c_str());
-      if (stringLengthPtr) {
-        *stringLengthPtr = static_cast<SQLSMALLINT>(std::strlen(message.c_str()));
-      }
-      logMessage("SQLGetDiagField returning SQL_DIAG_MESSAGE_TEXT = " + std::string(message));
-    }
-    break;
-
-    // Tell the client which concept to use when interpreting the status codes
+    return setString(message, diagInfoPtr, bufferLength, stringLengthPtr);
   case SQL_DIAG_CLASS_ORIGIN:
-    if (diagInfoPtr && bufferLength > 0) {
-      // Return "ISO 9075" for standard SQL classes and "ODBC 3.0" for custom ones.
-      std::snprintf(static_cast<char*>(diagInfoPtr), bufferLength, "%s", "ISO 9075");
-      static_cast<char*>(diagInfoPtr)[bufferLength - 1] = '\0'; // Null-terminate
-      if (stringLengthPtr) {
-        *stringLengthPtr = static_cast<SQLSMALLINT>(std::strlen("ISO 9075"));
-      }
-      logMessage("SQLGetDiagField returning SQL_DIAG_CLASS_ORIGIN = ISO 9075");
-    }
-    break;
-
-    // Tell the client which sub-concept to use when interpreting the status codes
   case SQL_DIAG_SUBCLASS_ORIGIN:
-    if (diagInfoPtr && bufferLength > 0) {
-      // Return "ISO 9075" for standard SQL classes and "ODBC 3.0" for custom ones.
-      std::snprintf(static_cast<char*>(diagInfoPtr), bufferLength, "%s", "ISO 9075");
-      static_cast<char*>(diagInfoPtr)[bufferLength - 1] = '\0'; // Null-terminate
-      if (stringLengthPtr) {
-        *stringLengthPtr = static_cast<SQLSMALLINT>(std::strlen("ISO 9075"));
-      }
-      logMessage("SQLGetDiagField returning SQL_DIAG_SUBCLASS_ORIGIN = ISO 9075");
-    }
-    break;
-
+    return setString(sqlState.compare(0, 2, "IM") == 0 || sqlState.compare(0, 2, "HY") == 0
+                         ? "ODBC 3.0"
+                         : "ISO 9075",
+                     diagInfoPtr, bufferLength, stringLengthPtr);
   case SQL_DIAG_CONNECTION_NAME:
-    if (diagInfoPtr && bufferLength > 0) {
-      std::snprintf(static_cast<char*>(diagInfoPtr), bufferLength, "%s", "DefaultConnection");
-      static_cast<char*>(diagInfoPtr)[bufferLength - 1] = '\0'; // Null-terminate
-      if (stringLengthPtr) {
-        *stringLengthPtr = static_cast<SQLSMALLINT>(std::strlen("DefaultConnection"));
-      }
-      logMessage("SQLGetDiagField returning SQL_DIAG_CONNECTION_NAME = DefaultConnection");
-    }
-    break;
-
+    return setString("", diagInfoPtr, bufferLength, stringLengthPtr);
   case SQL_DIAG_SERVER_NAME:
-    if (diagInfoPtr && bufferLength > 0) {
-      std::snprintf(static_cast<char*>(diagInfoPtr), bufferLength, "%s", "ApacheIoTDBServer");
-      static_cast<char*>(diagInfoPtr)[bufferLength - 1] = '\0'; // Null-terminate
-      if (stringLengthPtr) {
-        *stringLengthPtr = static_cast<SQLSMALLINT>(std::strlen("ApacheIoTDBServer"));
-      }
-      logMessage("SQLGetDiagField returning SQL_DIAG_SERVER_NAME = ApacheIoTDBServer");
-    }
-    break;
-
+    return setString("Apache IoTDB", diagInfoPtr, bufferLength, stringLengthPtr);
+  case SQL_DIAG_ROW_NUMBER:
+    if (diagInfoPtr)
+      *static_cast<SQLLEN*>(diagInfoPtr) = SQL_NO_ROW_NUMBER;
+    return SQL_SUCCESS;
+  case SQL_DIAG_COLUMN_NUMBER:
+    if (diagInfoPtr)
+      *static_cast<SQLINTEGER*>(diagInfoPtr) = SQL_NO_COLUMN_NUMBER;
+    return SQL_SUCCESS;
   default:
-    logMessage("SQLGetDiagField received unsupported DiagIdentifier, returning SQL_ERROR\n");
     return SQL_ERROR;
   }
-
-  // Log exit from SQLGetDiagField
-  logMessage("Exiting SQLGetDiagField\n");
-  return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLGetDiagRec(SQLSMALLINT handleType, SQLHANDLE handle, SQLSMALLINT recNumber,
                                 SQLCHAR* sqlStatePtr, SQLINTEGER* nativeErrorPtr,
                                 SQLCHAR* messageTextPtr, SQLSMALLINT bufferLength,
                                 SQLSMALLINT* textLengthPtr) {
-  logMessage("Entering SQLGetDiagRec");
-  std::stringstream logStream;
-  logStream << "Parameters: "
-            << "handleType = " << handleType << ", handle = " << handleToString(handle)
-            << ", recNumber = " << recNumber
-            << ", sqlStatePtr = " << (sqlStatePtr ? sqlCharToString(sqlStatePtr) : "NULL")
-            << ", nativeErrorPtr = " << (nativeErrorPtr ? *nativeErrorPtr : 0)
-            << ", messageTextPtr = " << (messageTextPtr ? sqlCharToString(messageTextPtr) : "NULL")
-            << ", bufferLength = " << bufferLength
-            << ", textLengthPtr = " << (textLengthPtr ? *textLengthPtr : 0);
-  logMessage(logStream.str());
-
+  if (!handle)
+    return SQL_INVALID_HANDLE;
   auto* odbcHandle = static_cast<ODBCHandle*>(handle);
-  std::string sqlState, message;
-  int nativeError;
+  if (odbcHandle->getHandleType() != handleType)
+    return SQL_INVALID_HANDLE;
+  if (recNumber <= 0 || bufferLength < 0)
+    return SQL_ERROR;
 
-  const auto diagnostic = odbcHandle->getDiagnostic(recNumber, sqlState, message, nativeError);
-  if (!diagnostic) {
-    logMessage("Exiting SQLGetDiagRec: Couldn't find diagnostic information\n");
+  std::string sqlState;
+  std::string message;
+  int nativeError = 0;
+  if (!odbcHandle->getDiagnostic(recNumber, sqlState, message, nativeError))
     return SQL_NO_DATA;
-  }
 
   if (sqlStatePtr) {
-    logMessage("SQLGetDiagRec returning sqlState = " + std::string(sqlState));
-    std::snprintf(reinterpret_cast<char*>(sqlStatePtr), 6, "%s", sqlState.c_str());
+    std::memcpy(sqlStatePtr, sqlState.data(), std::min<size_t>(5, sqlState.size()));
+    sqlStatePtr[std::min<size_t>(5, sqlState.size())] = '\0';
   }
-  if (nativeErrorPtr) {
-    logMessage("SQLGetDiagRec returning nativeError = " + std::to_string(nativeError));
+  if (nativeErrorPtr)
     *nativeErrorPtr = nativeError;
-  }
-  if (messageTextPtr) {
-    logMessage("SQLGetDiagRec returning messageText = " + std::string(message));
-    std::snprintf(reinterpret_cast<char*>(messageTextPtr), bufferLength, "%s", message.c_str());
-  }
-  if (textLengthPtr) {
-    *textLengthPtr = static_cast<SQLSMALLINT>(message.length());
-  }
+  if (textLengthPtr)
+    *textLengthPtr = static_cast<SQLSMALLINT>(
+        std::min(message.size(), static_cast<size_t>(std::numeric_limits<SQLSMALLINT>::max())));
 
-  logMessage("Exiting SQLGetDiagRec\n");
-  return SQL_SUCCESS;
+  if (!messageTextPtr)
+    return SQL_SUCCESS;
+  if (bufferLength == 0)
+    return message.empty() ? SQL_SUCCESS : SQL_SUCCESS_WITH_INFO;
+  const size_t copyLength = std::min(message.size(), static_cast<size_t>(bufferLength - 1));
+  std::memcpy(messageTextPtr, message.data(), copyLength);
+  messageTextPtr[copyLength] = '\0';
+  return copyLength < message.size() ? SQL_SUCCESS_WITH_INFO : SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLGetEnvAttr(SQLHENV environmentHandle, SQLINTEGER attribute, SQLPOINTER value,
@@ -3153,11 +3909,129 @@ SQLRETURN SQL_API SQLGetEnvAttr(SQLHENV environmentHandle, SQLINTEGER attribute,
     return SQL_INVALID_HANDLE;
   }
   auto env = static_cast<EnvironmentHandle*>(environmentHandle);
-  logMessage(nullptr, "SQLGetEnvAttr is not implemented", LOG_LEVEL_ERROR);
-  if (env) {
-    env->addDiagnostic("IM001", "SQLGetEnvAttr Function not implemented");
+  env->clearDiagnostics();
+  if (!value) {
+    env->addDiagnostic("HY009", "Invalid use of null pointer");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  (void)bufferLength;
+  switch (attribute) {
+  case SQL_ATTR_ODBC_VERSION:
+    *static_cast<SQLINTEGER*>(value) = env->odbcVersion;
+    break;
+  case SQL_ATTR_OUTPUT_NTS:
+    *static_cast<SQLINTEGER*>(value) = SQL_TRUE;
+    break;
+  default:
+    env->addDiagnostic("HY092", "Invalid attribute/option identifier");
+    return SQL_ERROR;
+  }
+  if (stringLength)
+    *stringLength = sizeof(SQLINTEGER);
+  return SQL_SUCCESS;
+}
+
+static bool IsSupportedOdbcFunction(SQLUSMALLINT functionId) {
+  static const SQLUSMALLINT supportedFunctions[] = {
+      SQL_API_SQLALLOCCONNECT,   SQL_API_SQLALLOCENV,         SQL_API_SQLALLOCHANDLE,
+      SQL_API_SQLALLOCSTMT,      SQL_API_SQLBINDCOL,          SQL_API_SQLBINDPARAM,
+      SQL_API_SQLBINDPARAMETER,  SQL_API_SQLCANCEL,           SQL_API_SQLCLOSECURSOR,
+      SQL_API_SQLCOLATTRIBUTE,   SQL_API_SQLCOLUMNS,          SQL_API_SQLCONNECT,
+      SQL_API_SQLCOPYDESC,       SQL_API_SQLDATASOURCES,      SQL_API_SQLDESCRIBECOL,
+      SQL_API_SQLDISCONNECT,     SQL_API_SQLDRIVERS,          SQL_API_SQLENDTRAN,
+      SQL_API_SQLERROR,          SQL_API_SQLEXECDIRECT,       SQL_API_SQLEXECUTE,
+      SQL_API_SQLFETCH,          SQL_API_SQLFETCHSCROLL,      SQL_API_SQLFREECONNECT,
+      SQL_API_SQLFREEENV,        SQL_API_SQLFREEHANDLE,       SQL_API_SQLFREESTMT,
+      SQL_API_SQLGETCONNECTATTR, SQL_API_SQLGETCONNECTOPTION, SQL_API_SQLGETCURSORNAME,
+      SQL_API_SQLGETDATA,        SQL_API_SQLGETDESCFIELD,     SQL_API_SQLGETDESCREC,
+      SQL_API_SQLGETDIAGFIELD,   SQL_API_SQLGETDIAGREC,       SQL_API_SQLGETENVATTR,
+      SQL_API_SQLGETFUNCTIONS,   SQL_API_SQLGETINFO,          SQL_API_SQLGETSTMTATTR,
+      SQL_API_SQLGETSTMTOPTION,  SQL_API_SQLGETTYPEINFO,      SQL_API_SQLMORERESULTS,
+      SQL_API_SQLNUMPARAMS,      SQL_API_SQLNUMRESULTCOLS,    SQL_API_SQLNATIVESQL,
+      SQL_API_SQLPARAMDATA,      SQL_API_SQLPREPARE,          SQL_API_SQLPUTDATA,
+      SQL_API_SQLROWCOUNT,       SQL_API_SQLSETCONNECTATTR,   SQL_API_SQLSETCONNECTOPTION,
+      SQL_API_SQLSETCURSORNAME,  SQL_API_SQLSETDESCFIELD,     SQL_API_SQLSETDESCREC,
+      SQL_API_SQLSETENVATTR,     SQL_API_SQLSETPARAM,         SQL_API_SQLSETSTMTATTR,
+      SQL_API_SQLSETSTMTOPTION,  SQL_API_SQLSPECIALCOLUMNS,   SQL_API_SQLSTATISTICS,
+      SQL_API_SQLTABLES,         SQL_API_SQLTRANSACT,         SQL_API_SQLDRIVERCONNECT};
+#ifdef SQL_API_SQLCANCELHANDLE
+  if (functionId == SQL_API_SQLCANCELHANDLE)
+    return true;
+#endif
+  return std::find(std::begin(supportedFunctions), std::end(supportedFunctions), functionId) !=
+         std::end(supportedFunctions);
+}
+
+SQLRETURN SQL_API SQLGetFunctions(SQLHDBC connectionHandle, SQLUSMALLINT functionId,
+                                  SQLUSMALLINT* supportedPtr) {
+  if (!connectionHandle)
+    return SQL_INVALID_HANDLE;
+  auto* cnct = static_cast<ConnectionHandle*>(connectionHandle);
+  cnct->clearDiagnostics();
+  if (!supportedPtr) {
+    cnct->addDiagnostic("HY009", "Invalid use of null pointer");
+    return SQL_ERROR;
+  }
+
+  if (functionId == SQL_API_ALL_FUNCTIONS) {
+    std::fill(supportedPtr, supportedPtr + 100, SQL_FALSE);
+    for (SQLUSMALLINT id = 0; id < 100; ++id) {
+      if (IsSupportedOdbcFunction(id))
+        supportedPtr[id] = SQL_TRUE;
+    }
+    return SQL_SUCCESS;
+  }
+  if (functionId == SQL_API_ODBC3_ALL_FUNCTIONS) {
+    std::fill(supportedPtr, supportedPtr + SQL_API_ODBC3_ALL_FUNCTIONS_SIZE, 0);
+    for (SQLUSMALLINT id = 0; id < SQL_API_ODBC3_ALL_FUNCTIONS_SIZE * 16; ++id) {
+      if (IsSupportedOdbcFunction(id))
+        supportedPtr[id >> 4] |= static_cast<SQLUSMALLINT>(1U << (id & 0x000F));
+    }
+    return SQL_SUCCESS;
+  }
+
+  *supportedPtr = IsSupportedOdbcFunction(functionId) ? SQL_TRUE : SQL_FALSE;
+  return SQL_SUCCESS;
+}
+
+SQLRETURN SQL_API SQLNativeSql(SQLHDBC connectionHandle, SQLCHAR* inStatementText,
+                               SQLINTEGER textLength1, SQLCHAR* outStatementText,
+                               SQLINTEGER bufferLength, SQLINTEGER* textLength2Ptr) {
+  if (!connectionHandle)
+    return SQL_INVALID_HANDLE;
+  auto* cnct = static_cast<ConnectionHandle*>(connectionHandle);
+  cnct->clearDiagnostics();
+  if (!inStatementText) {
+    cnct->addDiagnostic("HY009", "Invalid use of null pointer");
+    return SQL_ERROR;
+  }
+  if ((textLength1 < 0 && textLength1 != SQL_NTS) || bufferLength < 0) {
+    cnct->addDiagnostic("HY090", "Invalid string or buffer length");
+    return SQL_ERROR;
+  }
+
+  const size_t inputLength = textLength1 == SQL_NTS
+                                 ? std::strlen(reinterpret_cast<const char*>(inStatementText))
+                                 : static_cast<size_t>(textLength1);
+  if (textLength2Ptr) {
+    *textLength2Ptr = static_cast<SQLINTEGER>(
+        std::min(inputLength, static_cast<size_t>(std::numeric_limits<SQLINTEGER>::max())));
+  }
+  if (!outStatementText)
+    return SQL_SUCCESS;
+  if (bufferLength == 0) {
+    cnct->addDiagnostic("01004", "String data, right truncated");
+    return inputLength == 0 ? SQL_SUCCESS : SQL_SUCCESS_WITH_INFO;
+  }
+
+  const size_t copyLength = std::min(inputLength, static_cast<size_t>(bufferLength - 1));
+  std::memcpy(outStatementText, inStatementText, copyLength);
+  outStatementText[copyLength] = '\0';
+  if (copyLength < inputLength) {
+    cnct->addDiagnostic("01004", "String data, right truncated");
+    return SQL_SUCCESS_WITH_INFO;
+  }
+  return SQL_SUCCESS;
 }
 
 /*
@@ -3260,30 +4134,32 @@ void SQLGetInfoSetString(ConnectionHandle* cnct, std::string name, std::string v
                "buffer size.",
                LOG_LEVEL_DEBUG);
     if (stringLengthPtr) {
-      *stringLengthPtr = static_cast<SQLSMALLINT>(value.size() + 1);
+      *stringLengthPtr = static_cast<SQLSMALLINT>(
+          std::min(value.size(), static_cast<size_t>(std::numeric_limits<SQLSMALLINT>::max())));
     }
     return;
   }
 
   if (bufferLength <= 0) {
     logMessage(cnct, "SQLGetInfoSetString: bufferLength <= 0. Exiting.", LOG_LEVEL_ERROR);
+    cnct->addDiagnostic(bufferLength < 0 ? "HY090" : "01004",
+                        bufferLength < 0 ? "Invalid string or buffer length"
+                                         : "String data, right truncated");
     return;
   }
 
   size_t max_copy = std::min(value.size(), static_cast<size_t>(bufferLength - 1));
   std::strncpy(static_cast<char*>(infoValuePtr), value.data(), max_copy);
   static_cast<char*>(infoValuePtr)[max_copy] = '\0';
+  if (max_copy < value.size())
+    cnct->addDiagnostic("01004", "String data, right truncated");
 
   if (stringLengthPtr) {
     // return the actual length of answer, not the copied length.
     *stringLengthPtr = static_cast<SQLSMALLINT>(value.size());
   }
 
-  if (isLogLevelEnabled(cnct, LOG_LEVEL_TRACE)) {
-    std::ostringstream oss;
-    oss << "SQLGetInfoSetString returning " << name << " = " << value;
-    logMessage(cnct, oss.str(), LOG_LEVEL_TRACE);
-  }
+  logMessage(cnct, "SQLGetInfoSetString returning " + name, LOG_LEVEL_TRACE);
 }
 
 std::string getServerVersion(SQLHDBC connectionHandle) {
@@ -3291,18 +4167,16 @@ std::string getServerVersion(SQLHDBC connectionHandle) {
   logMessage(cnct, "getServerVersion: Entering.", LOG_LEVEL_TRACE);
 
   // Create a temporary statement handle for the query
-  StatementHandle* stmt = new StatementHandle(cnct);
-  SQLRETURN ret = IoTDB_ExecDirect(stmt, "show version");
+  std::unique_ptr<StatementHandle> stmt(new StatementHandle(cnct));
+  SQLRETURN ret = IoTDB_ExecDirect(stmt.get(), "show version");
 
   if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
     logMessage(cnct, "getServerVersion: Failed to execute show version query", LOG_LEVEL_ERROR);
-    delete stmt;
     return "Unknown";
   }
 
   if (stmt->resultSetPtr == nullptr || stmt->resultSetPtr->isEmpty()) {
     logMessage(cnct, "getServerVersion: No result set available", LOG_LEVEL_ERROR);
-    delete stmt;
     return "Unknown";
   }
 
@@ -3315,25 +4189,40 @@ std::string getServerVersion(SQLHDBC connectionHandle) {
 
   logMessage(cnct, "getServerVersion: Retrieved version: " + version, LOG_LEVEL_DEBUG);
 
-  // Clean up
-  delete stmt;
-
   logMessage(cnct, "getServerVersion: Exiting.", LOG_LEVEL_TRACE);
   return version;
 }
 
 std::string formatVersion(const std::string& ver) {
-  std::istringstream iss(ver);
-  std::string token;
-  std::vector<std::string> parts;
-  while (std::getline(iss, token, '.')) {
-    parts.push_back(token);
+  // ODBC requires ##.##.####. Accept suffixes such as "-SNAPSHOT" and
+  // return a stable unknown value instead of throwing through the C ABI.
+  const int widths[] = {2, 2, 4};
+  unsigned int parts[] = {0, 0, 0};
+  size_t offset = 0;
+  bool foundNumber = false;
+  for (size_t part = 0; part < 3 && offset < ver.size(); ++part) {
+    size_t end = offset;
+    unsigned int parsed = 0;
+    const unsigned int maximum = part < 2 ? 99U : 9999U;
+    while (end < ver.size() && std::isdigit(static_cast<unsigned char>(ver[end]))) {
+      foundNumber = true;
+      const unsigned int digit = static_cast<unsigned int>(ver[end] - '0');
+      parsed = parsed > (maximum - digit) / 10U ? maximum : parsed * 10U + digit;
+      ++end;
+    }
+    parts[part] = parsed;
+    if (end >= ver.size() || ver[end] != '.')
+      break;
+    offset = end + 1;
   }
+  if (!foundNumber)
+    return "00.00.0000";
+
   std::ostringstream oss;
-  for (size_t i = 0; i < parts.size(); i++) {
+  for (size_t i = 0; i < 3; ++i) {
     if (i > 0)
       oss << ".";
-    oss << std::setw(2) << std::setfill('0') << std::stoi(parts[i]);
+    oss << std::setw(widths[i]) << std::setfill('0') << parts[i];
   }
   return oss.str();
 }
@@ -3357,17 +4246,23 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     logMessage(cnct, logStream.str(), LOG_LEVEL_TRACE);
   }
 
-  SQLUSMALLINT value = 0;
+  SQLUINTEGER value = 0;
 
   if (!connectionHandle) {
     logMessage(cnct, "SQLGetInfo: Invalid connectionHandle", LOG_LEVEL_ERROR);
-    return SQL_ERROR;
+    return SQL_INVALID_HANDLE;
   }
+  cnct->clearDiagnostics();
 
   switch (infoType) {
   case SQL_DRIVER_NAME: // 6 sqlext.h
-    SQLGetInfoSetString(cnct, "SQL_DRIVER_NAME", "Apache IoTDB Driver", infoValuePtr, bufferLength,
-                        stringLengthPtr);
+#ifdef _WIN32
+    SQLGetInfoSetString(cnct, "SQL_DRIVER_NAME", "apache_iotdb_odbc.dll", infoValuePtr,
+                        bufferLength, stringLengthPtr);
+#else
+    SQLGetInfoSetString(cnct, "SQL_DRIVER_NAME", "libapache_iotdb_odbc.so", infoValuePtr,
+                        bufferLength, stringLengthPtr);
+#endif
     break;
 
   case SQL_DRIVER_ODBC_VER: // 77 sqlext.h
@@ -3386,8 +4281,8 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     break;
 
   case SQL_ACTIVE_CONNECTIONS: // 0 sqlext.h (Redefinition of SQL_MAX_DRIVER_CONNECTIONS from sql.h)
-    // not able to get this value from IoTDB configure. setting it as 10
-    SQLGetInfoSetNumeric(cnct, "SQL_ACTIVE_CONNECTIONS", 10, infoValuePtr, SQL_C_USHORT,
+    // Zero means that the limit is unknown or not defined.
+    SQLGetInfoSetNumeric(cnct, "SQL_ACTIVE_CONNECTIONS", 0, infoValuePtr, SQL_C_USHORT,
                          stringLengthPtr);
     break;
 
@@ -3397,14 +4292,14 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     break;
 
   case SQL_ACTIVE_STATEMENTS: // 1 sqlext.h (Redefinition of SQL_MAX_CONCURRENT_ACTIVITIES from swl.h)
-    SQLGetInfoSetNumeric(cnct, "SQL_ACTIVE_STATEMENTS", 10, infoValuePtr, SQL_C_USHORT,
-                         stringLengthPtr); // Assume no active statements initially
+    SQLGetInfoSetNumeric(cnct, "SQL_ACTIVE_STATEMENTS", 0, infoValuePtr, SQL_C_USHORT,
+                         stringLengthPtr);
     break;
 
 // iODBC only seems to support ODBC 3.0
 #ifdef SQL_OV_ODBC3_80
   case SQL_ASYNC_DBC_FUNCTIONS: // 10023 sqlext.h
-    SQLGetInfoSetNumeric(cnct, "SQL_ASYNC_DBC_FUNCTIONS", 0, infoValuePtr, SQL_C_USHORT,
+    SQLGetInfoSetNumeric(cnct, "SQL_ASYNC_DBC_FUNCTIONS", 0, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     // Most drivers do not support this
     break;
@@ -3438,7 +4333,7 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
 
   case SQL_GETDATA_EXTENSIONS: // 81
     SQLGetInfoSetNumeric(cnct, "SQL_GETDATA_EXTENSIONS", SQL_GD_ANY_COLUMN | SQL_GD_ANY_ORDER,
-                         infoValuePtr, SQL_C_USHORT, stringLengthPtr);
+                         infoValuePtr, SQL_C_ULONG, stringLengthPtr);
     // Indicates which `SQLGetData` features are supported.
     // Possible values (bitmask):
     // SQL_GD_BLOCK: Allows block fetch with SQLGetData.
@@ -3448,7 +4343,7 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     break;
 
   case SQL_DTC_TRANSITION_COST: // 1750
-    SQLGetInfoSetNumeric(cnct, "SQL_DTC_TRANSITION_COST", 0, infoValuePtr, SQL_C_USHORT,
+    SQLGetInfoSetNumeric(cnct, "SQL_DTC_TRANSITION_COST", 0, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     // Cost (in milliseconds) for a Distributed Transaction Coordinator (DTC) transaction transition.
     // This value should be adjusted based on the driver and system's transaction coordination cost.
@@ -3467,8 +4362,7 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
 
   case SQL_DBMS_VER: // 18
   {
-    // Return the current database version. TODO: Need to query to get the actual version.
-    // Now set to 1.3.3 for quick PowerBI availability verification
+    // Query and normalize the connected server's version.
     std::string versionStr = getServerVersion(connectionHandle);
     versionStr = formatVersion(versionStr);
     SQLGetInfoSetString(cnct, "SQL_DBMS_VER", versionStr, infoValuePtr, bufferLength,
@@ -3492,12 +4386,13 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     If the server supports catalog names, returns "Y"; if not, returns "N".
     Drivers conforming to SQL-92 Full level standard will always return "Y".
      */
-    SQLGetInfoSetString(cnct, "SQL_CATALOG_NAME", "Y", infoValuePtr, bufferLength, stringLengthPtr);
+    SQLGetInfoSetString(cnct, "SQL_CATALOG_NAME", cnct->isTableModel ? "Y" : "N", infoValuePtr,
+                        bufferLength, stringLengthPtr);
     break;
 
   case SQL_SCHEMA_USAGE: // 91
-    // TODO: Verify if this return value is correct: Need to validate if using database as catalog is reasonable, mainly depends on whether ODBC can accept structure without SCHEMA.
-    SQLGetInfoSetNumeric(cnct, "SQL_SCHEMA_USAGE", 0, infoValuePtr, SQL_C_USHORT, stringLengthPtr);
+    // IoTDB exposes no separate schema component through this driver.
+    SQLGetInfoSetNumeric(cnct, "SQL_SCHEMA_USAGE", 0, infoValuePtr, SQL_C_ULONG, stringLengthPtr);
     break;
     /*
         This attribute is a byte mask.
@@ -3520,30 +4415,29 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
          */
 
   case SQL_CATALOG_USAGE: // 92
-    // Available masks are the same as SQL_SCHEMA_USAGE, but oriented towards catalog.
-    // TODO: Verify if this return value is correct
-    value = SQL_SU_DML_STATEMENTS | SQL_SU_TABLE_DEFINITION;
-    SQLGetInfoSetNumeric(cnct, "SQL_CATALOG_USAGE", value, infoValuePtr, SQL_C_USHORT,
+    // Table-model databases occupy the ODBC catalog component. Tree model has no catalog.
+    value = cnct->isTableModel ? SQL_SU_DML_STATEMENTS | SQL_SU_TABLE_DEFINITION : 0;
+    SQLGetInfoSetNumeric(cnct, "SQL_CATALOG_USAGE", value, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     break;
 
   case SQL_CATALOG_NAME_SEPARATOR: // 41
     // Returns the character or string that the data source uses to separate catalog names from subsequent or preceding qualified name elements.
-    SQLGetInfoSetString(cnct, "SQL_CATALOG_NAME_SEPARATOR", ".", infoValuePtr, bufferLength,
-                        stringLengthPtr);
+    SQLGetInfoSetString(cnct, "SQL_CATALOG_NAME_SEPARATOR", cnct->isTableModel ? "." : "",
+                        infoValuePtr, bufferLength, stringLengthPtr);
     break;
 
   case SQL_CATALOG_LOCATION: // 114
     // This value indicates the position of the catalog name in the full table name:
     // SQL_CL_START Catalog name is at the beginning of the table name (like file system path style)
-    SQLGetInfoSetNumeric(cnct, "SQL_CATALOG_LOCATION", SQL_CL_START, infoValuePtr, SQL_C_USHORT,
-                         stringLengthPtr);
+    SQLGetInfoSetNumeric(cnct, "SQL_CATALOG_LOCATION", cnct->isTableModel ? SQL_CL_START : 0,
+                         infoValuePtr, SQL_C_USHORT, stringLengthPtr);
     break;
 
   case SQL_SQL_CONFORMANCE:
-    // TODO: Not sure if this is correct
-    SQLGetInfoSetNumeric(cnct, "SQL_SQL_CONFORMANCE", SQL_SC_SQL92_ENTRY, infoValuePtr,
-                         SQL_C_USHORT, stringLengthPtr);
+    // IoTDB SQL is model-specific; do not claim a complete SQL-92 conformance level.
+    SQLGetInfoSetNumeric(cnct, "SQL_SQL_CONFORMANCE", 0, infoValuePtr, SQL_C_ULONG,
+                         stringLengthPtr);
     break;
     /*
     This value is used to identify the SQL standard level supported by the driver, mainly including the following four compliance levels:
@@ -3556,28 +4450,24 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     */
 
   case SQL_MAX_COLUMNS_IN_ORDER_BY: //99
-                                    // TODO: Not sure if this is correct
     // This value specifies the maximum number of columns allowed in ORDER BY clause
     SQLGetInfoSetNumeric(cnct, "SQL_MAX_COLUMNS_IN_ORDER_BY", 0, infoValuePtr, SQL_C_USHORT,
                          stringLengthPtr);
     break;
 
   case SQL_MAX_IDENTIFIER_LEN: // 10005
-                               // TODO: Not sure if this is correct
-    // Maximum identifier length attribute
-    SQLGetInfoSetNumeric(cnct, "SQL_MAX_IDENTIFIER_LEN", 64, infoValuePtr, SQL_C_USHORT,
+    // Zero means no driver-enforced limit is known.
+    SQLGetInfoSetNumeric(cnct, "SQL_MAX_IDENTIFIER_LEN", 0, infoValuePtr, SQL_C_USHORT,
                          stringLengthPtr);
     break;
 
   case SQL_MAX_COLUMNS_IN_GROUP_BY: // 97
-                                    // TODO: Not sure if this is correct
     // This value specifies the maximum number of columns allowed in a GROUP BY clause
     SQLGetInfoSetNumeric(cnct, "SQL_MAX_COLUMNS_IN_GROUP_BY", 0, infoValuePtr, SQL_C_USHORT,
                          stringLengthPtr);
     break;
 
   case SQL_MAX_COLUMNS_IN_SELECT: // 100
-                                  // TODO: Not sure if this is correct
     // This attribute specifies the maximum number of columns that can be returned in a SELECT statement
     SQLGetInfoSetNumeric(cnct, "SQL_MAX_COLUMNS_IN_SELECT", 0, infoValuePtr, SQL_C_USHORT,
                          stringLengthPtr);
@@ -3590,39 +4480,30 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     break;
 
   case SQL_STRING_FUNCTIONS: // 50
-    // Scalar string functions supported by the driver and associated data source
-    value = SQL_FN_STR_LENGTH;
-    SQLGetInfoSetNumeric(cnct, "SQL_STRING_FUNCTIONS", value, infoValuePtr, SQL_C_USHORT,
+    // ODBC scalar escape translation ({fn ...}) is not implemented.
+    SQLGetInfoSetNumeric(cnct, "SQL_STRING_FUNCTIONS", 0, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     break;
 
   case SQL_AGGREGATE_FUNCTIONS: // 169
-                                // TODO: Not sure if this is correct
-    // Identifies the types of aggregate functions supported by the driver
-    SQLGetInfoSetNumeric(cnct, "SQL_AGGREGATE_FUNCTIONS", SQL_AF_ALL, infoValuePtr, SQL_C_USHORT,
+    SQLGetInfoSetNumeric(cnct, "SQL_AGGREGATE_FUNCTIONS", 0, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     break;
 
   case SQL_SQL92_PREDICATES: // 160
-    // TODO: Not sure if this is correct. Temporarily added all elements from SQL-92 Entry Level standard.
-    // Predicates supported in SELECT statements
-    value = SQL_SP_BETWEEN | SQL_SP_COMPARISON | SQL_SP_EXISTS | SQL_SP_IN | SQL_SP_ISNOTNULL |
-            SQL_SP_ISNULL | SQL_SP_LIKE | SQL_SP_UNIQUE | SQL_SP_QUANTIFIED_COMPARISON;
-    SQLGetInfoSetNumeric(cnct, "SQL_AGGREGATE_FUNCTIONS", value, infoValuePtr, SQL_C_USHORT,
+    // No portable SQL-92 predicate subset is advertised.
+    SQLGetInfoSetNumeric(cnct, "SQL_SQL92_PREDICATES", 0, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     break;
 
   case SQL_SQL92_RELATIONAL_JOIN_OPERATORS: // 161
     // Relational join operators supported in SELECT statements
-    value = SQL_SRJO_CROSS_JOIN | SQL_SRJO_INNER_JOIN | SQL_SRJO_LEFT_OUTER_JOIN |
-            SQL_SRJO_RIGHT_OUTER_JOIN;
-    SQLGetInfoSetNumeric(cnct, "SQL_SQL92_RELATIONAL_JOIN_OPERATORS", value, infoValuePtr,
-                         SQL_C_USHORT, stringLengthPtr);
+    SQLGetInfoSetNumeric(cnct, "SQL_SQL92_RELATIONAL_JOIN_OPERATORS", 0, infoValuePtr, SQL_C_ULONG,
+                         stringLengthPtr);
     break;
 
   case SQL_SQL92_VALUE_EXPRESSIONS: // 165
-    value = SQL_SVE_CASE | SQL_SVE_COALESCE;
-    SQLGetInfoSetNumeric(cnct, "SQL_SQL92_VALUE_EXPRESSIONS", value, infoValuePtr, SQL_C_USHORT,
+    SQLGetInfoSetNumeric(cnct, "SQL_SQL92_VALUE_EXPRESSIONS", 0, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     break;
 
@@ -3631,46 +4512,36 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     break;
 
   case SQL_GROUP_BY: // 88
-                     // TODO: Not sure if this is correct。
-    value = SQL_GB_GROUP_BY_CONTAINS_SELECT;
-    SQLGetInfoSetNumeric(cnct, "SQL_GROUP_BY", value, infoValuePtr, SQL_C_USHORT, stringLengthPtr);
+    // The portable ODBC GROUP BY grammar is not advertised.
+    SQLGetInfoSetNumeric(cnct, "SQL_GROUP_BY", SQL_GB_NOT_SUPPORTED, infoValuePtr, SQL_C_USHORT,
+                         stringLengthPtr);
     break;
 
   case SQL_NUMERIC_FUNCTIONS: // 49
-    value = SQL_FN_NUM_ABS | SQL_FN_NUM_ACOS | SQL_FN_NUM_ASIN | SQL_FN_NUM_ATAN |
-            SQL_FN_NUM_CEILING | SQL_FN_NUM_COS | SQL_FN_NUM_DEGREES | SQL_FN_NUM_EXP |
-            SQL_FN_NUM_FLOOR | SQL_FN_NUM_LOG | SQL_FN_NUM_LOG10 | SQL_FN_NUM_PI |
-            SQL_FN_NUM_POWER | SQL_FN_NUM_RADIANS | SQL_FN_NUM_ROUND | SQL_FN_NUM_SIGN |
-            SQL_FN_NUM_SIN | SQL_FN_NUM_SQRT | SQL_FN_NUM_TAN;
-    SQLGetInfoSetNumeric(cnct, "SQL_NUMERIC_FUNCTIONS", value, infoValuePtr, SQL_C_USHORT,
+    SQLGetInfoSetNumeric(cnct, "SQL_NUMERIC_FUNCTIONS", 0, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     break;
 
   case SQL_TIMEDATE_FUNCTIONS: // 52
-                               // TODO: Not sure if this is correct。
-    value = SQL_FN_TD_CURRENT_TIMESTAMP | SQL_FN_TD_NOW;
-    SQLGetInfoSetNumeric(cnct, "SQL_TIMEDATE_FUNCTIONS", value, infoValuePtr, SQL_C_USHORT,
+    SQLGetInfoSetNumeric(cnct, "SQL_TIMEDATE_FUNCTIONS", 0, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     break;
 
   case SQL_SYSTEM_FUNCTIONS: // 51
-                             // TODO: Not sure if this is correct。
-    SQLGetInfoSetNumeric(cnct, "SQL_SYSTEM_FUNCTIONS", 0, infoValuePtr, SQL_C_USHORT,
+    SQLGetInfoSetNumeric(cnct, "SQL_SYSTEM_FUNCTIONS", 0, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     break;
 
   case SQL_TIMEDATE_ADD_INTERVALS:
-    // TODO: Not sure if this is correct. It seems IoTDB's time calculation method is completely different from SQL standard.
-    // This attribute identifies the time interval types supported by the driver and data source through bitmask, used for TIMESTAMPADD scalar function in time arithmetic operations.
+    // ODBC TIMESTAMPADD escape intervals are not translated.
 
-    SQLGetInfoSetNumeric(cnct, "SQL_TIMEDATE_ADD_INTERVALS", 0, infoValuePtr, SQL_C_USHORT,
+    SQLGetInfoSetNumeric(cnct, "SQL_TIMEDATE_ADD_INTERVALS", 0, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     break;
 
   case SQL_TIMEDATE_DIFF_INTERVALS:
-    // TODO: Not sure if this is correct. It seems IoTDB's time calculation method is completely different from SQL standard.
-    // This attribute identifies the timestamp intervals supported by the driver and associated data source through bitmask for the TIMESTAMPDIFF scalar function.
-    SQLGetInfoSetNumeric(cnct, "SQL_TIMEDATE_DIFF_INTERVALS", 0, infoValuePtr, SQL_C_USHORT,
+    // ODBC TIMESTAMPDIFF escape intervals are not translated.
+    SQLGetInfoSetNumeric(cnct, "SQL_TIMEDATE_DIFF_INTERVALS", 0, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     break;
 
@@ -3685,8 +4556,8 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
 
   case SQL_CATALOG_TERM:
     // A character string that gives the name that the data source vendor uses for catalogs, such as "database" or "directory". This string can be upper case, lower case, or mixed case.
-    SQLGetInfoSetString(cnct, "SQL_CATALOG_TERM", "database", infoValuePtr, bufferLength,
-                        stringLengthPtr);
+    SQLGetInfoSetString(cnct, "SQL_CATALOG_TERM", cnct->isTableModel ? "database" : "",
+                        infoValuePtr, bufferLength, stringLengthPtr);
     break;
 
   case SQL_SCHEMA_TERM:
@@ -3711,7 +4582,7 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     A character string that specifies the escape character supported by the driver, which allows using pattern matching metacharacters underscore (_) and percent (%) as literal characters in search patterns.
     This escape character only applies to catalog function parameters that support search strings. If this string is empty, the driver does not support search pattern escape characters.
     */
-    SQLGetInfoSetString(cnct, "SQL_SEARCH_PATTERN_ESCAPE", "\\", infoValuePtr, bufferLength,
+    SQLGetInfoSetString(cnct, "SQL_SEARCH_PATTERN_ESCAPE", "", infoValuePtr, bufferLength,
                         stringLengthPtr);
     break;
 
@@ -3722,7 +4593,7 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     SQL_FN_CVT_CAST
     SQL_FN_CVT_CONVERT
     */
-    SQLGetInfoSetNumeric(cnct, "SQL_CONVERT_FUNCTIONS", SQL_FN_CVT_CAST, infoValuePtr, SQL_C_USHORT,
+    SQLGetInfoSetNumeric(cnct, "SQL_CONVERT_FUNCTIONS", 0, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     break;
 
@@ -3751,9 +4622,9 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
 
     The mask content is composed of multiple SQL_CVT_<type> ORed together.
 
-    TODO: Not sure if this result is correct. Because IoTDB seems to not support the convert function
+    No ODBC CONVERT escape conversions are advertised.
      */
-    SQLGetInfoSetNumeric(cnct, "SQL_CONVERT_xxx", 0, infoValuePtr, SQL_C_USHORT, stringLengthPtr);
+    SQLGetInfoSetNumeric(cnct, "SQL_CONVERT_xxx", 0, infoValuePtr, SQL_C_ULONG, stringLengthPtr);
     break;
 
   case SQL_CONVERT_WCHAR:
@@ -3763,7 +4634,7 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
         These three seem to be in the same series as the above. The corresponding SQL_CVT_<type> also exists.
         But these three things cannot be found in the official documentation. These macros can only be found in header files.
      */
-    SQLGetInfoSetNumeric(cnct, "SQL_CONVERT_xxx_wide", 0, infoValuePtr, SQL_C_USHORT,
+    SQLGetInfoSetNumeric(cnct, "SQL_CONVERT_xxx_wide", 0, infoValuePtr, SQL_C_ULONG,
                          stringLengthPtr);
     break;
 
@@ -3775,31 +4646,26 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
                         stringLengthPtr);
     break;
 
-  case 180:
-    // I haven't found what attribute 180 corresponds to, but bufferLength=4 indicates it's a numeric attribute
-    SQLGetInfoSetNumeric(cnct, "Infotype 180", 0, infoValuePtr, SQL_C_USHORT, stringLengthPtr);
-    break;
-
     /********
      * The following parameters have been deprecated in ODBC 3.0,
      * but Excel uses ODBC 2.0, so support is needed for Excel compatibility ********/
 
   case SQL_POS_OPERATIONS: // 79
     // Bitmask indicating the types of operations supported by the data source through the SQLSetPos function.
-    // SQLSetPos not implemented yet so return 0. TODO
+    // SQLSetPos is not supported, so no positioned operations are advertised.
     SQLGetInfoSetNumeric(cnct, "SQL_POS_OPERATIONS", 0, infoValuePtr, SQL_C_SLONG, stringLengthPtr);
     break;
 
   case SQL_STATIC_SENSITIVITY: // 83
     // Indicates whether the application can detect changes made to static or keyset-driven cursors by SQLSetPos or positioned update/delete statements
-    // SQLSetPos not implemented yet so return 0. TODO
+    // Static cursors and SQLSetPos are not supported.
     SQLGetInfoSetNumeric(cnct, "SQL_STATIC_SENSITIVITY", 0, infoValuePtr, SQL_C_SLONG,
                          stringLengthPtr);
     break;
 
   case SQL_LOCK_TYPES: // 78
     // Bitmask enumerating the lock types supported in the fLock argument of SQLSetPos function
-    // SQLSetPos not implemented yet so return 0. TODO
+    // SQLSetPos lock modes are not supported.
     SQLGetInfoSetNumeric(cnct, "SQL_LOCK_TYPES", 0, infoValuePtr, SQL_C_SLONG, stringLengthPtr);
     break;
 
@@ -3818,8 +4684,8 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
 
   case SQL_SCROLL_OPTIONS: // 44:
     // Bitmask enumerating the scroll options supported for scrollable cursors.
-    SQLGetInfoSetNumeric(cnct, "SQL_SCROLL_OPTIONS", SQL_SO_FORWARD_ONLY | SQL_SO_STATIC,
-                         infoValuePtr, SQL_C_ULONG, stringLengthPtr);
+    SQLGetInfoSetNumeric(cnct, "SQL_SCROLL_OPTIONS", SQL_SO_FORWARD_ONLY, infoValuePtr, SQL_C_ULONG,
+                         stringLengthPtr);
     break;
 
   case SQL_SCROLL_CONCURRENCY: // 43
@@ -3830,42 +4696,38 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
 
   case SQL_DYNAMIC_CURSOR_ATTRIBUTES1:
     // Bitmask describing the attributes of dynamic cursors supported by the driver.
-    SQLGetInfoSetNumeric(cnct, "SQL_DYNAMIC_CURSOR_ATTRIBUTES1",
-                         SQL_CA1_NEXT | SQL_CA1_ABSOLUTE | SQL_CA1_RELATIVE, infoValuePtr,
-                         SQL_C_ULONG, stringLengthPtr);
+    SQLGetInfoSetNumeric(cnct, "SQL_DYNAMIC_CURSOR_ATTRIBUTES1", 0, infoValuePtr, SQL_C_ULONG,
+                         stringLengthPtr);
     break;
 
   case SQL_KEYSET_CURSOR_ATTRIBUTES1:
     // Bitmask describing the attributes of keyset-driven cursors supported by the driver. This bitmask contains the first set of attributes; see SQL_KEYSET_CURSOR_ATTRIBUTES2 for the second set.
-    SQLGetInfoSetNumeric(cnct, "SQL_KEYSET_CURSOR_ATTRIBUTES1",
-                         SQL_CA1_NEXT | SQL_CA1_ABSOLUTE | SQL_CA1_RELATIVE, infoValuePtr,
-                         SQL_C_ULONG, stringLengthPtr);
+    SQLGetInfoSetNumeric(cnct, "SQL_KEYSET_CURSOR_ATTRIBUTES1", 0, infoValuePtr, SQL_C_ULONG,
+                         stringLengthPtr);
     break;
 
   case SQL_STATIC_CURSOR_ATTRIBUTES1:
     // Bitmask describing the attributes of static cursors supported by the driver. This bitmask contains the first set of attributes; see SQL_STATIC_CURSOR_ATTRIBUTES2 for the second set.
-    SQLGetInfoSetNumeric(cnct, "SQL_STATIC_CURSOR_ATTRIBUTES1",
-                         SQL_CA1_NEXT | SQL_CA1_ABSOLUTE | SQL_CA1_RELATIVE, infoValuePtr,
-                         SQL_C_ULONG, stringLengthPtr);
+    SQLGetInfoSetNumeric(cnct, "SQL_STATIC_CURSOR_ATTRIBUTES1", 0, infoValuePtr, SQL_C_ULONG,
+                         stringLengthPtr);
     break;
 
   case SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1: // 146
       // Bitmask describing the attributes of forward-only cursors supported by the driver. This bitmask contains the first set of attributes; see SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES2 for the second set.
-    SQLGetInfoSetNumeric(cnct, "SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1",
-                         SQL_CA1_NEXT | SQL_CA1_ABSOLUTE | SQL_CA1_RELATIVE, infoValuePtr,
+    SQLGetInfoSetNumeric(cnct, "SQL_FORWARD_ONLY_CURSOR_ATTRIBUTES1", SQL_CA1_NEXT, infoValuePtr,
                          SQL_C_ULONG, stringLengthPtr);
     break;
 
   case SQL_KEYSET_CURSOR_ATTRIBUTES2:
     // Bitmask describing the attributes of keyset-driven cursors supported by the driver. This bitmask contains the second set of attributes; see SQL_KEYSET_CURSOR_ATTRIBUTES1 for the first set.
-    SQLGetInfoSetNumeric(cnct, "SQL_KEYSET_CURSOR_ATTRIBUTES2", SQL_CA2_READ_ONLY_CONCURRENCY,
-                         infoValuePtr, SQL_C_ULONG, stringLengthPtr);
+    SQLGetInfoSetNumeric(cnct, "SQL_KEYSET_CURSOR_ATTRIBUTES2", 0, infoValuePtr, SQL_C_ULONG,
+                         stringLengthPtr);
     break;
 
   case SQL_STATIC_CURSOR_ATTRIBUTES2:
     // Bitmask describing the attributes of static cursors supported by the driver. This bitmask contains the second set of attributes; see SQL_STATIC_CURSOR_ATTRIBUTES1 for the first set.
-    SQLGetInfoSetNumeric(cnct, "SQL_KEYSET_CURSOR_ATTRIBUTES2", SQL_STATIC_CURSOR_ATTRIBUTES2,
-                         infoValuePtr, SQL_C_ULONG, stringLengthPtr);
+    SQLGetInfoSetNumeric(cnct, "SQL_STATIC_CURSOR_ATTRIBUTES2", 0, infoValuePtr, SQL_C_ULONG,
+                         stringLengthPtr);
     break;
 
   case SQL_NEED_LONG_DATA_LEN:
@@ -3888,15 +4750,14 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
 
   case SQL_DATA_SOURCE_NAME:
     // A character string representing the data source name used during connection. If the application called SQLConnect, this is the value of the szDSN parameter. If the application called SQLDriverConnect or SQLBrowseConnect, this is the value of the DSN keyword in the connection string passed to the driver. If the connection string does not contain a DSN keyword (for example, when it contains a DRIVER keyword), this is an empty string.
-    // TODO: Needs to be modified
-    SQLGetInfoSetString(cnct, "SQL_DATA_SOURCE_NAME", "Apache IoTDB Driver", infoValuePtr,
+    SQLGetInfoSetString(cnct, "SQL_DATA_SOURCE_NAME", cnct->dataSourceName, infoValuePtr,
                         bufferLength, stringLengthPtr);
     break;
 
   case SQL_DATA_SOURCE_READ_ONLY:
     // A character string. "Y" if the data source is set to read-only mode; "N" otherwise.
     // This characteristic is only related to the data source itself, not the driver used to access the data source. A driver that supports read-write operations can be used with a read-only data source. If a driver is read-only, all its data sources must be read-only and must return SQL_DATA_SOURCE_READ_ONLY.
-    SQLGetInfoSetString(cnct, "SQL_DATA_SOURCE_READ_ONLY", "Y", infoValuePtr, bufferLength,
+    SQLGetInfoSetString(cnct, "SQL_DATA_SOURCE_READ_ONLY", "N", infoValuePtr, bufferLength,
                         stringLengthPtr);
     break;
 
@@ -3908,8 +4769,8 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     SQL_IC_SENSITIVE = Identifiers in SQL are case-sensitive and stored in mixed case in system catalogs.
     SQL_IC_MIXED     = Identifiers in SQL are case-insensitive and stored in mixed case in system catalogs.
     */
-    SQLGetInfoSetNumeric(cnct, "SQL_IC_LOWER", 0, infoValuePtr, SQL_C_USHORT,
-                         stringLengthPtr); // Tested
+    SQLGetInfoSetNumeric(cnct, "SQL_IDENTIFIER_CASE", SQL_IC_SENSITIVE, infoValuePtr, SQL_C_USHORT,
+                         stringLengthPtr);
     break;
 
   case SQL_MAX_INDEX_SIZE:
@@ -3928,8 +4789,8 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
   case SQL_MAX_ROW_SIZE_INCLUDES_LONG:
     /*
     A character string: "Y" if the returned SQL_MAX_ROW_SIZE maximum row size information includes the length of all SQL_LONGVARCHAR and SQL_LONGVARBINARY type columns in the row; otherwise "N". */
-    SQLGetInfoSetString(cnct, "SQL_MAX_ROW_SIZE_INCLUDES_LONG", "SQL_IC_MIXED", infoValuePtr,
-                        bufferLength, stringLengthPtr);
+    SQLGetInfoSetString(cnct, "SQL_MAX_ROW_SIZE_INCLUDES_LONG", "N", infoValuePtr, bufferLength,
+                        stringLengthPtr);
     break;
 
   case SQL_MAX_TABLES_IN_SELECT:
@@ -3937,7 +4798,8 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     A SQLUSMALLINT value that specifies the maximum number of tables allowed in the FROM clause of a SELECT statement. If no limit is specified or the limit is unknown, this value is set to zero.
     Drivers conforming to FIPS Entry level standards will return at least 15. Drivers conforming to FIPS Intermediate level standards will return at least 50.
     */
-    SQLGetInfoSetNumeric(cnct, "SQL_MAX_ROW_SIZE", 0, infoValuePtr, SQL_C_USHORT, stringLengthPtr);
+    SQLGetInfoSetNumeric(cnct, "SQL_MAX_TABLES_IN_SELECT", 0, infoValuePtr, SQL_C_USHORT,
+                         stringLengthPtr);
     break;
 
   case SQL_NULL_COLLATION:
@@ -3950,22 +4812,20 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
 
   case SQL_PROCEDURE_TERM:
     // A character string giving the name that the data source vendor uses for "procedure".
-    // TODO: Not sure if IoTDB has the concept of procedure.
-    SQLGetInfoSetString(cnct, "SQL_PROCEDURE_TERM", "PROCEDURE", infoValuePtr, bufferLength,
+    // IoTDB exposes no stored procedures through this driver.
+    SQLGetInfoSetString(cnct, "SQL_PROCEDURE_TERM", "", infoValuePtr, bufferLength,
                         stringLengthPtr);
     break;
 
   case SQL_QUOTED_IDENTIFIER_CASE:
     // A SQLUSMALLINT value describing the case sensitivity and storage of quoted identifiers in SQL
     // In SQL-92 standard they are case sensitive, but IoTDB seems not to be sensitive.
-    SQLGetInfoSetNumeric(cnct, "SQL_ODBC_SQL_CONFORMANCE", SQL_IC_LOWER, infoValuePtr, SQL_C_USHORT,
-                         stringLengthPtr);
+    SQLGetInfoSetNumeric(cnct, "SQL_QUOTED_IDENTIFIER_CASE", SQL_IC_SENSITIVE, infoValuePtr,
+                         SQL_C_USHORT, stringLengthPtr);
     break;
 
   case SQL_ODBC_SQL_CONFORMANCE:
-    /*A SQLSMALLINT value that indicates the level of SQL grammar supported by the driver. Specific SQL grammar conformance levels can be found in Appendix C: SQL Grammar of the ODBC specification. (Only found the minimal definition, the other two levels were not found)
-    TODO: Not sure if this is correct.
-    */
+    // The driver accepts the ODBC minimum grammar used by interoperable applications.
     SQLGetInfoSetNumeric(cnct, "SQL_ODBC_SQL_CONFORMANCE", SQL_OSC_MINIMUM, infoValuePtr,
                          SQL_C_SSHORT, stringLengthPtr);
     break;
@@ -3973,7 +4833,6 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
   case SQL_INTEGRITY:
     // A string: "Y" if the data source supports Integrity Enhancement Facility; "N" if it does not.
     // Includes entity integrity, referential integrity, domain integrity, user-defined integrity.
-    // TODO: Not sure if this is correct.
     SQLGetInfoSetString(cnct, "SQL_INTEGRITY", "N", infoValuePtr, bufferLength, stringLengthPtr);
     break;
 
@@ -3982,9 +4841,7 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     // Drivers conforming to SQL-92 Entry Level standard always return a bitmask with all these bits set.
     // However, IoTDB does not support correlated subqueries.
 
-    SQLGetInfoSetNumeric(cnct, "SQL_SUBQUERIES",
-                         SQL_SQ_COMPARISON | SQL_SQ_EXISTS | SQL_SQ_IN | SQL_SQ_QUANTIFIED,
-                         infoValuePtr, SQL_C_ULONG, stringLengthPtr);
+    SQLGetInfoSetNumeric(cnct, "SQL_SUBQUERIES", 0, infoValuePtr, SQL_C_ULONG, stringLengthPtr);
     break;
 
   case SQL_TABLE_TERM: // 45
@@ -4006,8 +4863,8 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
 
   case SQL_SERVER_NAME:
     // A character string representing the server name as determined by the actual data source; this information is useful when connecting using SQLConnect, SQLDriverConnect, and SQLBrowseConnect when a data source name is used.
-    // But does IoTDB have the concept of server name? TODO: Not sure if this is correct.
-    SQLGetInfoSetString(cnct, "SQL_SERVER_NAME", "Apache IoTDB", infoValuePtr, bufferLength,
+    // Report the connected endpoint as the server name.
+    SQLGetInfoSetString(cnct, "SQL_SERVER_NAME", cnct->serverHostName, infoValuePtr, bufferLength,
                         stringLengthPtr);
     break;
 
@@ -4025,9 +4882,8 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
 
   case SQL_OJ_CAPABILITIES: // 115
     // A SQLUINTEGER bitmask enumerating the types of outer joins supported by the driver and data source.
-    SQLGetInfoSetNumeric(cnct, "SQL_OJ_CAPABILITIES",
-                         SQL_OJ_FULL | SQL_OJ_NESTED | SQL_OJ_NOT_ORDERED, infoValuePtr,
-                         SQL_C_ULONG, stringLengthPtr);
+    SQLGetInfoSetNumeric(cnct, "SQL_OJ_CAPABILITIES", 0, infoValuePtr, SQL_C_ULONG,
+                         stringLengthPtr);
     break;
 
   case SQL_PROCEDURES: // 21
@@ -4055,8 +4911,7 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
     break;
 
   case SQL_OUTER_JOINS: // 38
-    // No detailed description found. It should be missing from Microsoft's official documentation. Based on similar references, it indicates whether outer joins are supported.
-    SQLGetInfoSetString(cnct, "SQL_OUTER_JOINS", "Y", infoValuePtr, bufferLength, stringLengthPtr);
+    SQLGetInfoSetString(cnct, "SQL_OUTER_JOINS", "N", infoValuePtr, bufferLength, stringLengthPtr);
     break;
 
   case SQL_FILE_USAGE: // 84
@@ -4094,11 +4949,18 @@ SQLRETURN SQL_API SQLGetInfo(SQLHDBC connectionHandle, SQLUSMALLINT infoType,
   default:
     logMessage(cnct, "SQLGetInfo: received unsupported InfoType:" + std::to_string(infoType) + "\n",
                LOG_LEVEL_ERROR);
+    cnct->addDiagnostic("HY096", "Unsupported information type");
     return SQL_ERROR;
   }
 
   logMessage(cnct, "SQLGetInfo: Exiting\n", LOG_LEVEL_TRACE);
-  return SQL_SUCCESS;
+  if (cnct->diagnosticCount() == 0)
+    return SQL_SUCCESS;
+  std::string state;
+  std::string message;
+  int nativeError = 0;
+  cnct->getDiagnostic(1, state, message, nativeError);
+  return state == "01004" ? SQL_SUCCESS_WITH_INFO : SQL_ERROR;
 }
 
 SQLRETURN SQL_API SQLGetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute, SQLPOINTER value,
@@ -4121,6 +4983,22 @@ SQLRETURN SQL_API SQLGetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
     logMessage(cnct, "SQLGetStmtAttr: Invalid statement handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
+  stmt->clearDiagnostics();
+
+  const auto* ard = static_cast<DescriptorHandle*>(stmt->appRowDesc);
+  const auto* apd = static_cast<DescriptorHandle*>(stmt->appParamDesc);
+  const auto* ird = static_cast<DescriptorHandle*>(stmt->impRowDesc);
+  const auto* ipd = static_cast<DescriptorHandle*>(stmt->impParamDesc);
+  stmt->rowArraySize = ard->arraySize;
+  stmt->rowBindType = ard->bindType;
+  stmt->rowBindOffsetPtr = reinterpret_cast<SQLULEN*>(ard->bindOffsetPtr);
+  stmt->rowsFetchedPtr = ird->rowsProcessedPtr;
+  stmt->rowStatusPtr = ird->arrayStatusPtr;
+  stmt->paramSetSize = apd->arraySize;
+  stmt->paramBindType = apd->bindType;
+  stmt->paramBindOffsetPtr = reinterpret_cast<SQLULEN*>(apd->bindOffsetPtr);
+  stmt->paramsProcessedPtr = ipd->rowsProcessedPtr;
+  stmt->paramStatusPtr = ipd->arrayStatusPtr;
 
   switch (attribute) {
   case SQL_ATTR_APP_ROW_DESC:
@@ -4138,8 +5016,7 @@ SQLRETURN SQL_API SQLGetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
     // Return descriptor handle if applicable
     logMessage(cnct, "SQLGetStmtAttr: Processing SQL_ATTR_APP_PARAM_DESC", LOG_LEVEL_DEBUG);
     if (value) {
-      *static_cast<SQLHANDLE*>(value) =
-          stmt->appRowDesc; // Replace with actual descriptor handle if available
+      *static_cast<SQLHANDLE*>(value) = stmt->appParamDesc;
       logMessage(cnct, "SQLGetStmtAttr: Returning application parameter descriptor handle",
                  LOG_LEVEL_DEBUG);
     }
@@ -4160,8 +5037,7 @@ SQLRETURN SQL_API SQLGetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
     // Return descriptor handle if applicable
     logMessage(cnct, "SQLGetStmtAttr: Processing SQL_ATTR_IMP_PARAM_DESC", LOG_LEVEL_DEBUG);
     if (value) {
-      *static_cast<SQLHANDLE*>(value) =
-          stmt->impRowDesc; // Replace with actual descriptor handle if available
+      *static_cast<SQLHANDLE*>(value) = stmt->impParamDesc;
       logMessage(cnct, "SQLGetStmtAttr: Returning implementation parameter descriptor handle",
                  LOG_LEVEL_DEBUG);
     }
@@ -4188,17 +5064,82 @@ SQLRETURN SQL_API SQLGetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
   case SQL_ATTR_ROW_BIND_TYPE:
     logMessage(cnct, "SQLGetStmtAttr: Processing SQL_ATTR_ROW_BIND_TYPE", LOG_LEVEL_DEBUG);
     if (value) {
-      *static_cast<SQLULEN*>(value) = SQL_BIND_BY_COLUMN; // Example: default to column binding
+      *static_cast<SQLULEN*>(value) = stmt->rowBindType;
       logMessage(cnct, "SQLGetStmtAttr: Row bind type set to SQL_BIND_BY_COLUMN", LOG_LEVEL_DEBUG);
     }
     break;
 
   case SQL_ATTR_ROW_ARRAY_SIZE:
+    if (value)
+      *static_cast<SQLULEN*>(value) = stmt->rowArraySize;
+    break;
   case SQL_ATTR_ROWS_FETCHED_PTR:
+    if (value)
+      *static_cast<SQLULEN**>(value) = stmt->rowsFetchedPtr;
+    break;
   case SQL_ATTR_ROW_STATUS_PTR:
-  case SQL_ATTR_PARAM_BIND_OFFSET_PTR:
+    if (value)
+      *static_cast<SQLUSMALLINT**>(value) = stmt->rowStatusPtr;
+    break;
+  case SQL_ATTR_ROW_BIND_OFFSET_PTR:
+    if (value)
+      *static_cast<SQLULEN**>(value) = stmt->rowBindOffsetPtr;
+    break;
   case SQL_ATTR_PARAM_STATUS_PTR:
+    if (value)
+      *static_cast<SQLUSMALLINT**>(value) = stmt->paramStatusPtr;
+    break;
   case SQL_ATTR_PARAMS_PROCESSED_PTR:
+    if (value)
+      *static_cast<SQLULEN**>(value) = stmt->paramsProcessedPtr;
+    break;
+  case SQL_ATTR_PARAMSET_SIZE:
+    if (value)
+      *static_cast<SQLULEN*>(value) = stmt->paramSetSize;
+    break;
+  case SQL_ATTR_PARAM_BIND_TYPE:
+    if (value)
+      *static_cast<SQLULEN*>(value) = stmt->paramBindType;
+    break;
+  case SQL_ATTR_PARAM_BIND_OFFSET_PTR:
+    if (value)
+      *static_cast<SQLULEN**>(value) = stmt->paramBindOffsetPtr;
+    break;
+  case SQL_ATTR_ENABLE_AUTO_IPD:
+    if (value)
+      *static_cast<SQLULEN*>(value) = stmt->enableAutoIPD;
+    break;
+  case SQL_ATTR_CURSOR_TYPE:
+    if (value)
+      *static_cast<SQLULEN*>(value) = stmt->cursorType;
+    break;
+  case SQL_ATTR_CONCURRENCY:
+    if (value)
+      *static_cast<SQLULEN*>(value) = stmt->concurrency;
+    break;
+  case SQL_ATTR_USE_BOOKMARKS:
+    if (value)
+      *static_cast<SQLULEN*>(value) = stmt->useBookmarks;
+    break;
+  case SQL_ATTR_MAX_ROWS:
+    if (value)
+      *static_cast<SQLULEN*>(value) = stmt->maxRows;
+    break;
+  case SQL_ATTR_MAX_LENGTH:
+    if (value)
+      *static_cast<SQLULEN*>(value) = stmt->maxLength;
+    break;
+  case SQL_ATTR_NOSCAN:
+    if (value)
+      *static_cast<SQLULEN*>(value) = stmt->noScan;
+    break;
+  case SQL_ATTR_RETRIEVE_DATA:
+    if (value)
+      *static_cast<SQLULEN*>(value) = stmt->retrieveData;
+    break;
+  case SQL_ATTR_METADATA_ID:
+    if (value)
+      *static_cast<SQLULEN*>(value) = stmt->metadataId;
     break;
 
   default:
@@ -4223,13 +5164,35 @@ SQLRETURN SQL_API SQLGetStmtOption(SQLHSTMT statementHandle, SQLUSMALLINT option
     logMessage(nullptr, "SQLGetStmtOption: Invalid statement handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
-  auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLGetStmtOption is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLGetStmtOption Function not implemented");
+  switch (option) {
+  case SQL_QUERY_TIMEOUT:
+    if (value)
+      *static_cast<SQLULEN*>(value) = 0;
+    return SQL_SUCCESS;
+  case SQL_MAX_ROWS:
+    return SQLGetStmtAttr(statementHandle, SQL_ATTR_MAX_ROWS, value, 0, nullptr);
+  case SQL_NOSCAN:
+    return SQLGetStmtAttr(statementHandle, SQL_ATTR_NOSCAN, value, 0, nullptr);
+  case SQL_MAX_LENGTH:
+    return SQLGetStmtAttr(statementHandle, SQL_ATTR_MAX_LENGTH, value, 0, nullptr);
+  case SQL_BIND_TYPE:
+    return SQLGetStmtAttr(statementHandle, SQL_ATTR_ROW_BIND_TYPE, value, 0, nullptr);
+  case SQL_CURSOR_TYPE:
+    return SQLGetStmtAttr(statementHandle, SQL_ATTR_CURSOR_TYPE, value, 0, nullptr);
+  case SQL_CONCURRENCY:
+    return SQLGetStmtAttr(statementHandle, SQL_ATTR_CONCURRENCY, value, 0, nullptr);
+  case SQL_ROWSET_SIZE:
+    return SQLGetStmtAttr(statementHandle, SQL_ATTR_ROW_ARRAY_SIZE, value, 0, nullptr);
+  case SQL_RETRIEVE_DATA:
+    return SQLGetStmtAttr(statementHandle, SQL_ATTR_RETRIEVE_DATA, value, 0, nullptr);
+  case SQL_USE_BOOKMARKS:
+    return SQLGetStmtAttr(statementHandle, SQL_ATTR_USE_BOOKMARKS, value, 0, nullptr);
+  default:
+    auto* stmt = static_cast<StatementHandle*>(statementHandle);
+    stmt->clearDiagnostics();
+    stmt->addDiagnostic("HY092", "Invalid attribute/option identifier");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
 }
 
 SQLRETURN SQL_API SQLGetTypeInfo(SQLHSTMT statementHandle, SQLSMALLINT dataType) {
@@ -4340,18 +5303,19 @@ SQLRETURN SQL_API SQLNumResultCols(SQLHSTMT statementHandle, SQLSMALLINT* column
     return SQL_INVALID_HANDLE;
   }
 
-  if (stmt->resultSetPtr == nullptr || stmt->resultSetPtr->isEmpty()) {
-    logMessage(cnct, "SQLNumResultCols: Missing result set, returning 0", LOG_LEVEL_ERROR);
-    *columnCount = 0;
-    return SQL_SUCCESS;
-  }
-
   if (!columnCount) {
     logMessage(cnct, "SQLNumResultCols: columnCount pointer is null", LOG_LEVEL_ERROR);
     stmt->addDiagnostic("HY009", "Invalid use of null pointer");
     return SQL_ERROR;
   }
 
+  if (stmt->resultSetPtr == nullptr) {
+    logMessage(cnct, "SQLNumResultCols: Missing result set, returning 0", LOG_LEVEL_ERROR);
+    *columnCount = 0;
+    return SQL_SUCCESS;
+  }
+
+  PopulateImplementationRowDescriptor(stmt);
   *columnCount = stmt->resultSetPtr->getNumColumns();
   logMessage(cnct, "SQLNumResultCols: Returning column count: " + std::to_string(*columnCount),
              LOG_LEVEL_DEBUG);
@@ -4360,18 +5324,62 @@ SQLRETURN SQL_API SQLNumResultCols(SQLHSTMT statementHandle, SQLSMALLINT* column
   return SQL_SUCCESS;
 }
 
-SQLRETURN SQL_API SQLParamData(SQLHSTMT statementHandle, SQLPOINTER* value) {
-  if (!statementHandle) {
-    logMessage(nullptr, "SQLParamData: Invalid statement handle", LOG_LEVEL_ERROR);
+SQLRETURN SQL_API SQLNumParams(SQLHSTMT statementHandle, SQLSMALLINT* parameterCountPtr) {
+  if (!statementHandle)
     return SQL_INVALID_HANDLE;
+  auto* stmt = static_cast<StatementHandle*>(statementHandle);
+  stmt->clearDiagnostics();
+  if (!parameterCountPtr) {
+    stmt->addDiagnostic("HY009", "Invalid use of null pointer");
+    return SQL_ERROR;
   }
-  auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLParamData is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLParamData Function not implemented");
+  if (!stmt->prepared) {
+    stmt->addDiagnostic("HY010", "Statement has not been prepared");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  const size_t count = ParameterMarkerPositions(stmt->statementText).size();
+  if (count > static_cast<size_t>(std::numeric_limits<SQLSMALLINT>::max())) {
+    stmt->addDiagnostic("HY000", "Too many parameter markers");
+    return SQL_ERROR;
+  }
+  *parameterCountPtr = static_cast<SQLSMALLINT>(count);
+  return SQL_SUCCESS;
+}
+
+SQLRETURN SQL_API SQLParamData(SQLHSTMT statementHandle, SQLPOINTER* value) {
+  if (!statementHandle)
+    return SQL_INVALID_HANDLE;
+  auto* stmt = static_cast<StatementHandle*>(statementHandle);
+  stmt->clearDiagnostics();
+  if (!stmt->needsParameterData) {
+    stmt->addDiagnostic("HY010", "Function sequence error");
+    return SQL_ERROR;
+  }
+  const size_t markerCount = ParameterMarkerPositions(stmt->statementText).size();
+  for (SQLULEN set = stmt->nextDataSet; set < stmt->paramSetSize; ++set) {
+    const size_t firstParameter = set == stmt->nextDataSet ? stmt->nextDataParameter : 0;
+    for (size_t index = firstParameter; index < markerCount; ++index) {
+      ParameterBinding& binding = stmt->parameterBindings[index];
+      if (IsDataAtExecution(ParameterIndicatorAt(stmt, binding, set))) {
+        stmt->activeDataSet = set;
+        stmt->activeDataParameter = index;
+        stmt->nextDataSet = index + 1 < markerCount ? set : set + 1;
+        stmt->nextDataParameter = index + 1 < markerCount ? index + 1 : 0;
+        if (value)
+          *value = ParameterValueAt(stmt, binding, set);
+        return SQL_NEED_DATA;
+      }
+    }
+  }
+  stmt->needsParameterData = false;
+  stmt->activeDataSet = std::numeric_limits<SQLULEN>::max();
+  stmt->activeDataParameter = std::numeric_limits<size_t>::max();
+  try {
+    return ExecuteParameterSets(stmt);
+  } catch (const std::exception& error) {
+    stmt->addDiagnostic("HY000", error.what());
+    return SQL_ERROR;
+  }
 }
 
 SQLRETURN SQL_API SQLPrepare(SQLHSTMT statementHandle, SQLCHAR* statementText,
@@ -4381,26 +5389,66 @@ SQLRETURN SQL_API SQLPrepare(SQLHSTMT statementHandle, SQLCHAR* statementText,
     return SQL_INVALID_HANDLE;
   }
   auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLPrepare is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLPrepare Function not implemented");
+  stmt->clearDiagnostics();
+  if (!statementText) {
+    stmt->addDiagnostic("HY009", "Invalid use of null pointer");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  if (textLength < 0 && textLength != SQL_NTS) {
+    stmt->addDiagnostic("HY090", "Invalid string or buffer length");
+    return SQL_ERROR;
+  }
+  stmt->statementText = ConvertSQLCHARToString(statementText, textLength);
+  stmt->prepared = true;
+  stmt->ClearResultSet();
+  stmt->curRow = -1;
+  stmt->rowsReturned = 0;
+  return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLPutData(SQLHSTMT statementHandle, SQLPOINTER data, SQLLEN strLen_or_Ind) {
-  if (!statementHandle) {
-    logMessage(nullptr, "SQLPutData: Invalid statement handle", LOG_LEVEL_ERROR);
+  if (!statementHandle)
     return SQL_INVALID_HANDLE;
+  auto* stmt = static_cast<StatementHandle*>(statementHandle);
+  stmt->clearDiagnostics();
+  if (!stmt->needsParameterData || stmt->activeDataSet == std::numeric_limits<SQLULEN>::max() ||
+      stmt->activeDataParameter == std::numeric_limits<size_t>::max()) {
+    stmt->addDiagnostic("HY010", "Function sequence error");
+    return SQL_ERROR;
   }
-  auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLPutData is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLPutData Function not implemented");
+  ParameterBinding& binding = stmt->parameterBindings[stmt->activeDataParameter];
+  if (strLen_or_Ind == SQL_NULL_DATA) {
+    binding.streamedNull[stmt->activeDataSet] = true;
+    binding.streamedData[stmt->activeDataSet].clear();
+    return SQL_SUCCESS;
   }
-  return SQL_ERROR;
+  if (strLen_or_Ind < 0 && strLen_or_Ind != SQL_NTS) {
+    stmt->addDiagnostic("HY090", "Invalid string or buffer length");
+    return SQL_ERROR;
+  }
+  if (!data) {
+    stmt->addDiagnostic("HY009", "Invalid use of null pointer");
+    return SQL_ERROR;
+  }
+  const char* bytes = static_cast<const char*>(data);
+  const SQLSMALLINT valueType = binding.valueType == SQL_C_DEFAULT
+                                    ? DefaultParameterCType(binding.parameterType)
+                                    : binding.valueType;
+  size_t length = static_cast<size_t>(strLen_or_Ind);
+  if (valueType != SQL_C_CHAR && valueType != SQL_C_WCHAR && valueType != SQL_C_BINARY) {
+    length = CTypeSize(valueType, binding.bufferLength);
+  } else if (strLen_or_Ind == SQL_NTS) {
+    if (valueType == SQL_C_BINARY) {
+      stmt->addDiagnostic("HY090", "Invalid string or buffer length");
+      return SQL_ERROR;
+    }
+    length = valueType == SQL_C_WCHAR
+                 ? std::char_traits<SQLWCHAR>::length(static_cast<const SQLWCHAR*>(data)) *
+                       sizeof(SQLWCHAR)
+                 : std::strlen(bytes);
+  }
+  binding.streamedData[stmt->activeDataSet].append(bytes, length);
+  return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLRowCount(SQLHSTMT statementHandle, SQLLEN* rowCount) {
@@ -4421,14 +5469,14 @@ SQLRETURN SQL_API SQLRowCount(SQLHSTMT statementHandle, SQLLEN* rowCount) {
     return SQL_INVALID_HANDLE;
   }
 
-  if (stmt->isQuery == false || stmt->resultSetPtr == nullptr || stmt->resultSetPtr->isEmpty()) {
-    logMessage(cnct, "SQLRowCount: NonQuery statement or missing result set, returning -1",
-               LOG_LEVEL_WARN);
-    *rowCount = 0;
-    return SQL_SUCCESS;
+  if (!rowCount) {
+    stmt->addDiagnostic("HY009", "Invalid use of null pointer");
+    return SQL_ERROR;
   }
 
-  *rowCount = stmt->resultSetPtr->getNumRows();
+  // IoTDB does not expose an affected-row count, and query row counts may be
+  // incomplete while results are streamed.
+  *rowCount = -1;
   logMessage(cnct, "SQLRowCount: Returning row count: " + std::to_string(*rowCount),
              LOG_LEVEL_DEBUG);
 
@@ -4455,6 +5503,7 @@ SQLRETURN SQL_API SQLSetConnectAttr(const SQLHDBC connectionHandle, const SQLINT
     logMessage("SQLSetConnectAttr: Invalid ConnectionHandle");
     return SQL_INVALID_HANDLE;
   }
+  cnct->clearDiagnostics();
 
   // Handle supported attributes
   switch (attribute) {
@@ -4464,8 +5513,8 @@ SQLRETURN SQL_API SQLSetConnectAttr(const SQLHDBC connectionHandle, const SQLINT
       cnct->autoCommit = true;
       logMessage(cnct, "SQLSetConnectAttr: Autocommit enabled", LOG_LEVEL_DEBUG);
     } else if (value == reinterpret_cast<SQLPOINTER>(SQL_AUTOCOMMIT_OFF)) {
-      cnct->autoCommit = false;
-      logMessage(cnct, "SQLSetConnectAttr: Autocommit disabled", LOG_LEVEL_DEBUG);
+      cnct->addDiagnostic("HYC00", "Transactions are not supported");
+      return SQL_ERROR;
     } else {
       logMessage(cnct, "SQLSetConnectAttr: Invalid value for SQL_ATTR_AUTOCOMMIT", LOG_LEVEL_ERROR);
       cnct->addDiagnostic("HY024", "Invalid attribute value");
@@ -4475,33 +5524,27 @@ SQLRETURN SQL_API SQLSetConnectAttr(const SQLHDBC connectionHandle, const SQLINT
 
   case SQL_ATTR_CONNECTION_TIMEOUT:
     logMessage(cnct, "SQLSetConnectAttr: Processing SQL_ATTR_CONNECTION_TIMEOUT", LOG_LEVEL_DEBUG);
-    if (value) {
-      const SQLUINTEGER timeout = *static_cast<SQLUINTEGER*>(value);
-      cnct->timeoutConnection = timeout;
-      logMessage(cnct,
-                 "SQLSetConnectAttr: Connection timeout set to " + std::to_string(timeout) +
-                     " seconds",
-                 LOG_LEVEL_DEBUG);
-    } else {
-      logMessage(cnct, "SQLSetConnectAttr: Invalid value for SQL_ATTR_CONNECTION_TIMEOUT",
-                 LOG_LEVEL_ERROR);
-      cnct->addDiagnostic("HY024", "Invalid attribute value");
-      return SQL_ERROR;
-    }
+    cnct->timeoutConnection = static_cast<SQLUINTEGER>(reinterpret_cast<uintptr_t>(value));
     break;
 
   case SQL_ATTR_LOGIN_TIMEOUT:
     logMessage(cnct, "SQLSetConnectAttr: Processing SQL_ATTR_LOGIN_TIMEOUT", LOG_LEVEL_DEBUG);
-    if (value) {
+    {
       const SQLUINTEGER timeout = static_cast<SQLUINTEGER>(reinterpret_cast<uintptr_t>(value));
       cnct->timeoutLogin = timeout;
-      logMessage(cnct,
-                 "SQLSetConnectAttr: Login timeout set to " + std::to_string(timeout) + " seconds",
-                 LOG_LEVEL_DEBUG);
-    } else {
-      logMessage(cnct, "SQLSetConnectAttr: Invalid value for SQL_ATTR_LOGIN_TIMEOUT",
-                 LOG_LEVEL_ERROR);
-      cnct->addDiagnostic("HY024", "Invalid attribute value");
+      break;
+    }
+
+  case SQL_ATTR_ACCESS_MODE:
+    if (value != reinterpret_cast<SQLPOINTER>(SQL_MODE_READ_WRITE)) {
+      cnct->addDiagnostic("HYC00", "Read-only connection mode is not supported");
+      return SQL_ERROR;
+    }
+    break;
+
+  case SQL_ATTR_TXN_ISOLATION:
+    if (reinterpret_cast<uintptr_t>(value) != 0) {
+      cnct->addDiagnostic("HYC00", "Transactions are not supported");
       return SQL_ERROR;
     }
     break;
@@ -4514,7 +5557,14 @@ SQLRETURN SQL_API SQLSetConnectAttr(const SQLHDBC connectionHandle, const SQLINT
       cnct->addDiagnostic("HY024", "Invalid attribute value");
       return SQL_ERROR;
     }
-    std::string databaseName(static_cast<const char*>(value), stringLength);
+    if (stringLength < 0 && stringLength != SQL_NTS) {
+      cnct->addDiagnostic("HY090", "Invalid string or buffer length");
+      return SQL_ERROR;
+    }
+    const char* databaseValue = static_cast<const char*>(value);
+    std::string databaseName(databaseValue, stringLength == SQL_NTS
+                                                ? std::strlen(databaseValue)
+                                                : static_cast<size_t>(stringLength));
     if (databaseName.length() > 64) {
       logMessage(cnct, "SQLSetConnectAttr: Catalog name too long (max 64 characters)",
                  LOG_LEVEL_ERROR);
@@ -4539,13 +5589,15 @@ SQLRETURN SQL_API SQLSetConnectAttr(const SQLHDBC connectionHandle, const SQLINT
     if (cnct->isTableModel) {
       logMessage(cnct, "SQLSetConnectAttr: Setting current database: USE " + cnct->database,
                  LOG_LEVEL_DEBUG);
-      SQLRETURN sqlreturn;
       SQLHANDLE statementHandle = nullptr;
-      SQLAllocHandle(SQL_HANDLE_STMT, connectionHandle, &statementHandle);
-      StatementHandle* stmt = (StatementHandle*)statementHandle;
+      SQLRETURN sqlreturn = SQLAllocHandle(SQL_HANDLE_STMT, connectionHandle, &statementHandle);
+      if (!SQL_SUCCEEDED(sqlreturn))
+        return sqlreturn;
+      StatementHandle* stmt = static_cast<StatementHandle*>(statementHandle);
       sqlreturn = IoTDB_ExecDirect(stmt, ("USE " + cnct->database).c_str());
       if (sqlreturn != SQL_SUCCESS && sqlreturn != SQL_SUCCESS_WITH_INFO) {
         logMessage(cnct, "SQLSetConnectAttr: Setting current catalog failed!", LOG_LEVEL_ERROR);
+        SQLFreeHandle(SQL_HANDLE_STMT, stmt);
         return sqlreturn;
       }
       SQLFreeHandle(SQL_HANDLE_STMT, stmt);
@@ -4574,12 +5626,28 @@ SQLRETURN SQL_API SQLSetConnectOption(SQLHDBC connectionHandle, SQLUSMALLINT opt
     logMessage(nullptr, "SQLSetConnectOption: Invalid connection handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
-  auto cnct = static_cast<ConnectionHandle*>(connectionHandle);
-  logMessage(cnct, "SQLSetConnectOption is not implemented", LOG_LEVEL_ERROR);
-  if (cnct) {
-    cnct->addDiagnostic("IM001", "SQLSetConnectOption Function not implemented");
+  switch (option) {
+  case SQL_ACCESS_MODE:
+    return SQLSetConnectAttr(connectionHandle, SQL_ATTR_ACCESS_MODE,
+                             reinterpret_cast<SQLPOINTER>(value), 0);
+  case SQL_AUTOCOMMIT:
+    return SQLSetConnectAttr(connectionHandle, SQL_ATTR_AUTOCOMMIT,
+                             reinterpret_cast<SQLPOINTER>(value), 0);
+  case SQL_LOGIN_TIMEOUT:
+    return SQLSetConnectAttr(connectionHandle, SQL_ATTR_LOGIN_TIMEOUT,
+                             reinterpret_cast<SQLPOINTER>(value), 0);
+  case SQL_TXN_ISOLATION:
+    return SQLSetConnectAttr(connectionHandle, SQL_ATTR_TXN_ISOLATION,
+                             reinterpret_cast<SQLPOINTER>(value), 0);
+  case SQL_CURRENT_QUALIFIER:
+    return SQLSetConnectAttr(connectionHandle, SQL_ATTR_CURRENT_CATALOG,
+                             reinterpret_cast<SQLPOINTER>(value), SQL_NTS);
+  default:
+    auto* cnct = static_cast<ConnectionHandle*>(connectionHandle);
+    cnct->clearDiagnostics();
+    cnct->addDiagnostic("HY092", "Invalid attribute/option identifier");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
 }
 
 SQLRETURN SQL_API SQLSetCursorName(SQLHSTMT statementHandle, SQLCHAR* cursorName,
@@ -4589,49 +5657,186 @@ SQLRETURN SQL_API SQLSetCursorName(SQLHSTMT statementHandle, SQLCHAR* cursorName
     return SQL_INVALID_HANDLE;
   }
   auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLSetCursorName is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLSetCursorName Function not implemented");
+  stmt->clearDiagnostics();
+  if (!cursorName) {
+    stmt->addDiagnostic("HY009", "Invalid use of null pointer");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  if (nameLength < 0 && nameLength != SQL_NTS) {
+    stmt->addDiagnostic("HY090", "Invalid string or buffer length");
+    return SQL_ERROR;
+  }
+  stmt->cursorName.assign(reinterpret_cast<const char*>(cursorName),
+                          nameLength == SQL_NTS
+                              ? std::strlen(reinterpret_cast<const char*>(cursorName))
+                              : static_cast<size_t>(nameLength));
+  return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLSetDescField(SQLHDESC descriptorHandle, SQLSMALLINT recNumber,
                                   SQLSMALLINT fieldIdentifier, SQLPOINTER value,
                                   SQLINTEGER bufferLength) {
-  if (!descriptorHandle) {
-    logMessage(nullptr, "SQLSetDescField: Invalid descriptor handle", LOG_LEVEL_ERROR);
+  if (!descriptorHandle)
     return SQL_INVALID_HANDLE;
+  auto* descriptor = static_cast<DescriptorHandle*>(descriptorHandle);
+  if (descriptor->getHandleType() != SQL_HANDLE_DESC)
+    return SQL_INVALID_HANDLE;
+  descriptor->clearDiagnostics();
+  if (descriptor->role == DescriptorRole::IMPLEMENTATION_ROW &&
+      fieldIdentifier != SQL_DESC_ARRAY_STATUS_PTR &&
+      fieldIdentifier != SQL_DESC_ROWS_PROCESSED_PTR) {
+    descriptor->addDiagnostic("HY016", "Cannot modify an implementation row descriptor");
+    return SQL_ERROR;
   }
-  logMessage(nullptr, "SQLSetDescField is not implemented", LOG_LEVEL_ERROR);
-  if (descriptorHandle) {
-    auto odbcHandle = static_cast<ODBCHandle*>(descriptorHandle);
-    odbcHandle->addDiagnostic("IM001", "SQLSetDescField Function not implemented");
+  const SQLULEN unsignedValue = reinterpret_cast<SQLULEN>(value);
+  const SQLLEN signedValue = reinterpret_cast<SQLLEN>(value);
+  switch (fieldIdentifier) {
+  case SQL_DESC_ARRAY_SIZE:
+    if (unsignedValue == 0) {
+      descriptor->addDiagnostic("HY092", "Invalid descriptor array size");
+      return SQL_ERROR;
+    }
+    descriptor->arraySize = unsignedValue;
+    return SQL_SUCCESS;
+  case SQL_DESC_ARRAY_STATUS_PTR:
+    descriptor->arrayStatusPtr = static_cast<SQLUSMALLINT*>(value);
+    return SQL_SUCCESS;
+  case SQL_DESC_BIND_OFFSET_PTR:
+    descriptor->bindOffsetPtr = static_cast<SQLLEN*>(value);
+    return SQL_SUCCESS;
+  case SQL_DESC_BIND_TYPE:
+    descriptor->bindType = unsignedValue;
+    return SQL_SUCCESS;
+  case SQL_DESC_COUNT:
+    if (signedValue < 0 || signedValue > std::numeric_limits<SQLSMALLINT>::max()) {
+      descriptor->addDiagnostic("HY092", "Invalid descriptor count");
+      return SQL_ERROR;
+    }
+    descriptor->count = static_cast<SQLSMALLINT>(signedValue);
+    descriptor->records.resize(static_cast<size_t>(descriptor->count));
+    return SQL_SUCCESS;
+  case SQL_DESC_ROWS_PROCESSED_PTR:
+    descriptor->rowsProcessedPtr = static_cast<SQLULEN*>(value);
+    return SQL_SUCCESS;
+  case SQL_DESC_ALLOC_TYPE:
+    descriptor->addDiagnostic("HY091", "Descriptor allocation type is read-only");
+    return SQL_ERROR;
+  default:
+    break;
   }
-  return SQL_ERROR;
+
+  if (recNumber < 1) {
+    descriptor->addDiagnostic("07009", "Invalid descriptor index");
+    return SQL_ERROR;
+  }
+  DescriptorRecord& record = descriptor->record(recNumber);
+  descriptor->count = std::max(descriptor->count, recNumber);
+  switch (fieldIdentifier) {
+  case SQL_DESC_CONCISE_TYPE:
+    record.setConciseType(static_cast<SQLSMALLINT>(signedValue));
+    record.dataPtr = nullptr;
+    break;
+  case SQL_DESC_TYPE:
+    record.type = static_cast<SQLSMALLINT>(signedValue);
+    record.updateConciseType();
+    record.dataPtr = nullptr;
+    break;
+  case SQL_DESC_DATETIME_INTERVAL_CODE:
+    record.datetimeIntervalCode = static_cast<SQLSMALLINT>(signedValue);
+    record.updateConciseType();
+    record.dataPtr = nullptr;
+    break;
+  case SQL_DESC_OCTET_LENGTH:
+    record.octetLength = signedValue;
+    record.dataPtr = nullptr;
+    break;
+  case SQL_DESC_LENGTH:
+    record.length = unsignedValue;
+    record.dataPtr = nullptr;
+    break;
+  case SQL_DESC_PRECISION:
+    record.precision = static_cast<SQLSMALLINT>(signedValue);
+    record.dataPtr = nullptr;
+    break;
+  case SQL_DESC_SCALE:
+    record.scale = static_cast<SQLSMALLINT>(signedValue);
+    record.dataPtr = nullptr;
+    break;
+  case SQL_DESC_DATA_PTR:
+    record.dataPtr = value;
+    break;
+  case SQL_DESC_INDICATOR_PTR:
+    record.indicatorPtr = static_cast<SQLLEN*>(value);
+    break;
+  case SQL_DESC_OCTET_LENGTH_PTR:
+    record.octetLengthPtr = static_cast<SQLLEN*>(value);
+    break;
+  case SQL_DESC_PARAMETER_TYPE:
+    record.parameterType = static_cast<SQLSMALLINT>(signedValue);
+    break;
+  case SQL_DESC_NAME: {
+    if (!value) {
+      record.name.clear();
+      break;
+    }
+    if (bufferLength < 0 && bufferLength != SQL_NTS) {
+      descriptor->addDiagnostic("HY090", "Invalid string or buffer length");
+      return SQL_ERROR;
+    }
+    const char* text = static_cast<const char*>(value);
+    record.name.assign(text, bufferLength == SQL_NTS ? std::strlen(text)
+                                                     : static_cast<size_t>(bufferLength));
+    record.unnamed = record.name.empty() ? SQL_UNNAMED : SQL_NAMED;
+    break;
+  }
+  default:
+    descriptor->addDiagnostic("HY091", "Invalid descriptor field identifier");
+    return SQL_ERROR;
+  }
+  return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLSetDescRec(SQLHDESC descriptorHandle, SQLSMALLINT recNumber, SQLSMALLINT type,
                                 SQLSMALLINT subType, SQLLEN length, SQLSMALLINT precision,
                                 SQLSMALLINT scale, SQLPOINTER data, SQLLEN* stringLength,
                                 SQLLEN* indicator) {
-  if (!descriptorHandle) {
-    logMessage(nullptr, "SQLSetDescRec: Invalid descriptor handle", LOG_LEVEL_ERROR);
+  if (!descriptorHandle)
     return SQL_INVALID_HANDLE;
+  auto* descriptor = static_cast<DescriptorHandle*>(descriptorHandle);
+  if (descriptor->getHandleType() != SQL_HANDLE_DESC)
+    return SQL_INVALID_HANDLE;
+  descriptor->clearDiagnostics();
+  if (descriptor->role == DescriptorRole::IMPLEMENTATION_ROW) {
+    descriptor->addDiagnostic("HY016", "Cannot modify an implementation row descriptor");
+    return SQL_ERROR;
   }
-  logMessage(nullptr, "SQLSetDescRec is not implemented", LOG_LEVEL_ERROR);
-  if (descriptorHandle) {
-    auto odbcHandle = static_cast<ODBCHandle*>(descriptorHandle);
-    odbcHandle->addDiagnostic("IM001", "SQLSetDescRec Function not implemented");
+  if (recNumber < 1) {
+    descriptor->addDiagnostic("07009", "Invalid descriptor index");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  DescriptorRecord& record = descriptor->record(recNumber);
+  descriptor->count = std::max(descriptor->count, recNumber);
+  record.type = type;
+  record.datetimeIntervalCode = subType;
+  record.updateConciseType();
+  record.octetLength = length;
+  record.length = static_cast<SQLULEN>(std::max<SQLLEN>(0, length));
+  record.precision = precision;
+  record.scale = scale;
+  record.dataPtr = data;
+  record.octetLengthPtr = stringLength;
+  record.indicatorPtr = indicator;
+  return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLSetEnvAttr(const SQLHENV environmentHandle, const SQLINTEGER attribute,
                                 SQLPOINTER value, const SQLINTEGER stringLength) {
   EnvironmentHandle* env = static_cast<EnvironmentHandle*>(environmentHandle);
   logMessage(nullptr, "SQLSetEnvAttr: Entering", LOG_LEVEL_TRACE);
+
+  if (!env)
+    return SQL_INVALID_HANDLE;
+  env->clearDiagnostics();
 
   if (isLogLevelEnabled(nullptr, LOG_LEVEL_TRACE)) {
     std::stringstream logStream;
@@ -4691,6 +5896,13 @@ SQLRETURN SQL_API SQLSetEnvAttr(const SQLHENV environmentHandle, const SQLINTEGE
     logMessage(nullptr, "SQLSetEnvAttr: Connection pooling is not supported", LOG_LEVEL_INFO);
     return SQL_SUCCESS;
 
+  case SQL_ATTR_OUTPUT_NTS:
+    if (reinterpret_cast<uintptr_t>(value) != SQL_TRUE) {
+      env->addDiagnostic("HYC00", "Null-terminated output is required");
+      return SQL_ERROR;
+    }
+    return SQL_SUCCESS;
+
   default:
     logMessage(nullptr, "SQLSetEnvAttr: Unsupported attribute: " + std::to_string(attribute),
                LOG_LEVEL_WARN);
@@ -4703,17 +5915,9 @@ SQLRETURN SQL_API SQLSetParam(SQLHSTMT statementHandle, SQLUSMALLINT parameterNu
                               SQLSMALLINT valueType, SQLSMALLINT parameterType,
                               SQLULEN lengthPrecision, SQLSMALLINT parameterScale,
                               SQLPOINTER parameterValue, SQLLEN* strLen_or_Ind) {
-  if (!statementHandle) {
-    logMessage(nullptr, "SQLSetParam: Invalid statement handle", LOG_LEVEL_ERROR);
-    return SQL_INVALID_HANDLE;
-  }
-  auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLSetParam is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLSetParam Function not implemented");
-  }
-  return SQL_ERROR;
+  return SQLBindParameter(statementHandle, parameterNumber, SQL_PARAM_INPUT, valueType,
+                          parameterType, lengthPrecision, parameterScale, parameterValue,
+                          static_cast<SQLLEN>(lengthPrecision), strLen_or_Ind);
 }
 
 SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute, SQLPOINTER value,
@@ -4738,28 +5942,48 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
     logMessage(cnct, "SQLSetStmtAttr: Invalid statement handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
+  stmt->clearDiagnostics();
 
   switch (attribute) {
   case SQL_QUERY_TIMEOUT:
-    logMessage(cnct, "SQLSetStmtAttr: Processing SQL_QUERY_TIMEOUT", LOG_LEVEL_DEBUG);
-    // TODO: Implement query timeout functionality
-    logMessage(cnct, "SQLSetStmtAttr: Query timeout setting is not yet implemented",
-               LOG_LEVEL_WARN);
+    if (reinterpret_cast<SQLULEN>(value) != 0) {
+      stmt->addDiagnostic("HYC00", "Query timeout is not supported");
+      return SQL_ERROR;
+    }
     break;
 
   case SQL_ATTR_APP_ROW_DESC:
-    logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_APP_ROW_DESC", LOG_LEVEL_DEBUG);
-    // TODO: Implement application row descriptor functionality
-    logMessage(cnct, "SQLSetStmtAttr: Application row descriptor setting is not yet implemented",
-               LOG_LEVEL_WARN);
+    if (!value) {
+      stmt->appRowDesc = stmt->implicitAppRowDesc;
+      break;
+    }
+    if (static_cast<ODBCHandle*>(value)->getHandleType() != SQL_HANDLE_DESC ||
+        static_cast<DescriptorHandle*>(value)->connection != cnct) {
+      stmt->addDiagnostic("HY024", "Invalid attribute value");
+      return SQL_ERROR;
+    }
+    if (static_cast<DescriptorHandle*>(value)->implicit && value != stmt->implicitAppRowDesc) {
+      stmt->addDiagnostic("HY017", "Invalid use of an automatically allocated descriptor");
+      return SQL_ERROR;
+    }
+    stmt->appRowDesc = value;
     break;
 
   case SQL_ATTR_APP_PARAM_DESC:
-    logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_APP_PARAM_DESC", LOG_LEVEL_DEBUG);
-    // TODO: Implement application parameter descriptor functionality
-    logMessage(cnct,
-               "SQLSetStmtAttr: Application parameter descriptor setting is not yet implemented",
-               LOG_LEVEL_WARN);
+    if (!value) {
+      stmt->appParamDesc = stmt->implicitAppParamDesc;
+      break;
+    }
+    if (static_cast<ODBCHandle*>(value)->getHandleType() != SQL_HANDLE_DESC ||
+        static_cast<DescriptorHandle*>(value)->connection != cnct) {
+      stmt->addDiagnostic("HY024", "Invalid attribute value");
+      return SQL_ERROR;
+    }
+    if (static_cast<DescriptorHandle*>(value)->implicit && value != stmt->implicitAppParamDesc) {
+      stmt->addDiagnostic("HY017", "Invalid use of an automatically allocated descriptor");
+      return SQL_ERROR;
+    }
+    stmt->appParamDesc = value;
     break;
 
   case SQL_ATTR_ROWS_FETCHED_PTR: {
@@ -4776,17 +6000,20 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
     }
     // Store the pointer to the rows fetched counter
     stmt->rowsFetchedPtr = static_cast<SQLULEN*>(value);
+    stmt->implicitImpRowDesc->rowsProcessedPtr = stmt->rowsFetchedPtr;
     logMessage(cnct, "SQLSetStmtAttr: Rows fetched pointer set", LOG_LEVEL_DEBUG);
     break;
   }
 
+  case SQL_ATTR_ROW_STATUS_PTR:
+    stmt->rowStatusPtr = static_cast<SQLUSMALLINT*>(value);
+    stmt->implicitImpRowDesc->arrayStatusPtr = static_cast<SQLUSMALLINT*>(value);
+    break;
+
   case SQL_ATTR_CURSOR_TYPE:
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_CURSOR_TYPE", LOG_LEVEL_DEBUG);
-    // Validate if cursor type is valid
-    if (value != (SQLPOINTER)SQL_CURSOR_FORWARD_ONLY && value != (SQLPOINTER)SQL_CURSOR_STATIC &&
-        value != (SQLPOINTER)SQL_CURSOR_KEYSET_DRIVEN && value != (SQLPOINTER)SQL_CURSOR_DYNAMIC) {
-      logMessage(cnct, "SQLSetStmtAttr: Invalid cursor type specified", LOG_LEVEL_ERROR);
-      stmt->addDiagnostic("HY024", "Invalid cursor type");
+    if (value != reinterpret_cast<SQLPOINTER>(SQL_CURSOR_FORWARD_ONLY)) {
+      stmt->addDiagnostic("HYC00", "Only forward-only cursors are supported");
       return SQL_ERROR;
     }
     stmt->cursorType = static_cast<SQLINTEGER>(reinterpret_cast<intptr_t>(value));
@@ -4795,11 +6022,8 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
 
   case SQL_ATTR_CONCURRENCY:
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_CONCURRENCY", LOG_LEVEL_DEBUG);
-    // Validate if concurrency type is valid
-    if (value != (SQLPOINTER)SQL_CONCUR_READ_ONLY && value != (SQLPOINTER)SQL_CONCUR_LOCK &&
-        value != (SQLPOINTER)SQL_CONCUR_ROWVER && value != (SQLPOINTER)SQL_CONCUR_VALUES) {
-      logMessage(cnct, "SQLSetStmtAttr: Invalid concurrency type specified", LOG_LEVEL_ERROR);
-      stmt->addDiagnostic("HY024", "Invalid concurrency type");
+    if (value != reinterpret_cast<SQLPOINTER>(SQL_CONCUR_READ_ONLY)) {
+      stmt->addDiagnostic("HYC00", "Only read-only concurrency is supported");
       return SQL_ERROR;
     }
     stmt->concurrency = static_cast<SQLINTEGER>(reinterpret_cast<intptr_t>(value));
@@ -4808,10 +6032,8 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
 
   case SQL_ATTR_CURSOR_SCROLLABLE:
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_CURSOR_SCROLLABLE", LOG_LEVEL_DEBUG);
-    // Validate if scrollable
-    if (value != (SQLPOINTER)SQL_NONSCROLLABLE && value != (SQLPOINTER)SQL_SCROLLABLE) {
-      logMessage(cnct, "SQLSetStmtAttr: Invalid scrollable option specified", LOG_LEVEL_ERROR);
-      stmt->addDiagnostic("HY024", "Invalid scrollable option");
+    if (value != reinterpret_cast<SQLPOINTER>(SQL_NONSCROLLABLE)) {
+      stmt->addDiagnostic("HYC00", "Scrollable cursors are not supported");
       return SQL_ERROR;
     }
     stmt->scrollable = static_cast<SQLINTEGER>(reinterpret_cast<intptr_t>(value));
@@ -4820,11 +6042,8 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
 
   case SQL_ATTR_CURSOR_SENSITIVITY:
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_CURSOR_SENSITIVITY", LOG_LEVEL_DEBUG);
-    // Validate sensitivity setting
-    if (value != (SQLPOINTER)SQL_UNSPECIFIED && value != (SQLPOINTER)SQL_INSENSITIVE &&
-        value != (SQLPOINTER)SQL_SENSITIVE) {
-      logMessage(cnct, "SQLSetStmtAttr: Invalid cursor sensitivity specified", LOG_LEVEL_ERROR);
-      stmt->addDiagnostic("HY024", "Invalid cursor sensitivity");
+    if (value != reinterpret_cast<SQLPOINTER>(SQL_UNSPECIFIED)) {
+      stmt->addDiagnostic("HYC00", "Cursor sensitivity is not supported");
       return SQL_ERROR;
     }
     stmt->sensitivity = static_cast<SQLINTEGER>(reinterpret_cast<intptr_t>(value));
@@ -4833,11 +6052,8 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
 
   case SQL_ATTR_USE_BOOKMARKS:
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_USE_BOOKMARKS", LOG_LEVEL_DEBUG);
-    // Set whether to use bookmarks
-    if (value != (SQLPOINTER)SQL_UB_OFF && value != (SQLPOINTER)SQL_UB_VARIABLE &&
-        value != (SQLPOINTER)SQL_UB_FIXED) {
-      logMessage(cnct, "SQLSetStmtAttr: Invalid bookmark option specified", LOG_LEVEL_ERROR);
-      stmt->addDiagnostic("HY024", "Invalid bookmark option");
+    if (value != reinterpret_cast<SQLPOINTER>(SQL_UB_OFF)) {
+      stmt->addDiagnostic("HYC00", "Bookmarks are not supported");
       return SQL_ERROR;
     }
     stmt->useBookmarks = static_cast<SQLINTEGER>(reinterpret_cast<intptr_t>(value));
@@ -4845,37 +6061,58 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
     break;
 
   case SQL_ATTR_FETCH_BOOKMARK_PTR:
-    logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_FETCH_BOOKMARK_PTR", LOG_LEVEL_DEBUG);
-    // Store bookmark pointer
-    stmt->bookmarkPtr = static_cast<SQLULEN*>(value);
-    logMessage(cnct, "SQLSetStmtAttr: Bookmark pointer set", LOG_LEVEL_DEBUG);
+    if (value) {
+      stmt->addDiagnostic("HYC00", "Bookmarks are not supported");
+      return SQL_ERROR;
+    }
+    stmt->bookmarkPtr = nullptr;
     break;
 
   case SQL_ATTR_ROW_ARRAY_SIZE:
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_ROW_ARRAY_SIZE", LOG_LEVEL_DEBUG);
-    // Set row array size
-    stmt->rowArraySize = (SQLULEN)value;
+    if (reinterpret_cast<SQLULEN>(value) == 0) {
+      stmt->addDiagnostic("HY024", "Row array size must be greater than zero");
+      return SQL_ERROR;
+    }
+    stmt->rowArraySize = reinterpret_cast<SQLULEN>(value);
+    static_cast<DescriptorHandle*>(stmt->appRowDesc)->arraySize = stmt->rowArraySize;
     logMessage(cnct, "SQLSetStmtAttr: Row array size set", LOG_LEVEL_DEBUG);
     break;
 
   case SQL_ATTR_ROW_BIND_TYPE:
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_ROW_BIND_TYPE", LOG_LEVEL_DEBUG);
-    // Set row bind type
     stmt->rowBindType = reinterpret_cast<SQLULEN>(value);
+    static_cast<DescriptorHandle*>(stmt->appRowDesc)->bindType = stmt->rowBindType;
     logMessage(cnct, "SQLSetStmtAttr: Row bind type set", LOG_LEVEL_DEBUG);
     break;
 
   case SQL_ATTR_PARAMSET_SIZE:
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_PARAMSET_SIZE", LOG_LEVEL_DEBUG);
-    // Set parameter set size
-    stmt->paramSetSize = (SQLULEN)value;
+    if (reinterpret_cast<SQLULEN>(value) == 0) {
+      stmt->addDiagnostic("HY024", "Parameter set size must be greater than zero");
+      return SQL_ERROR;
+    }
+    stmt->paramSetSize = reinterpret_cast<SQLULEN>(value);
+    static_cast<DescriptorHandle*>(stmt->appParamDesc)->arraySize = stmt->paramSetSize;
     logMessage(cnct, "SQLSetStmtAttr: Parameter set size set", LOG_LEVEL_DEBUG);
+    break;
+
+  case SQL_ATTR_PARAM_BIND_TYPE:
+    stmt->paramBindType = reinterpret_cast<SQLULEN>(value);
+    static_cast<DescriptorHandle*>(stmt->appParamDesc)->bindType = stmt->paramBindType;
+    break;
+
+  case SQL_ATTR_PARAM_BIND_OFFSET_PTR:
+    stmt->paramBindOffsetPtr = static_cast<SQLULEN*>(value);
+    static_cast<DescriptorHandle*>(stmt->appParamDesc)->bindOffsetPtr =
+        reinterpret_cast<SQLLEN*>(value);
     break;
 
   case SQL_ATTR_PARAMS_PROCESSED_PTR:
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_PARAMS_PROCESSED_PTR", LOG_LEVEL_DEBUG);
     // Store processed parameter pointer
     stmt->paramsProcessedPtr = static_cast<SQLULEN*>(value);
+    stmt->implicitImpParamDesc->rowsProcessedPtr = stmt->paramsProcessedPtr;
     logMessage(cnct, "SQLSetStmtAttr: Params processed pointer set", LOG_LEVEL_DEBUG);
     break;
 
@@ -4883,6 +6120,7 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_PARAM_STATUS_PTR", LOG_LEVEL_DEBUG);
     // Store parameter status pointer
     stmt->paramStatusPtr = static_cast<SQLUSMALLINT*>(value);
+    stmt->implicitImpParamDesc->arrayStatusPtr = static_cast<SQLUSMALLINT*>(value);
     logMessage(cnct, "SQLSetStmtAttr: Parameter status pointer set", LOG_LEVEL_DEBUG);
     break;
 
@@ -4896,7 +6134,8 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
   case SQL_ATTR_NOSCAN:
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_NOSCAN", LOG_LEVEL_DEBUG);
     // Set whether to scan
-    if (value != (SQLPOINTER)SQL_NOSCAN && value != (SQLPOINTER)SQL_UNNAMED) {
+    if (value != reinterpret_cast<SQLPOINTER>(SQL_NOSCAN_OFF) &&
+        value != reinterpret_cast<SQLPOINTER>(SQL_NOSCAN_ON)) {
       logMessage(cnct, "SQLSetStmtAttr: Invalid noscan option specified", LOG_LEVEL_ERROR);
       stmt->addDiagnostic("HY024", "Invalid noscan option");
       return SQL_ERROR;
@@ -4906,18 +6145,13 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
     break;
 
   case SQL_ATTR_SIMULATE_CURSOR:
-    logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_SIMULATE_CURSOR", LOG_LEVEL_DEBUG);
-    // TODO: Implement cursor simulation functionality
-    logMessage(cnct, "SQLSetStmtAttr: Cursor simulation setting is not yet implemented",
-               LOG_LEVEL_WARN);
-    break;
+    stmt->addDiagnostic("HYC00", "Cursor simulation is not supported");
+    return SQL_ERROR;
 
   case SQL_ATTR_RETRIEVE_DATA:
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_RETRIEVE_DATA", LOG_LEVEL_DEBUG);
-    // Set whether to retrieve data
-    if (value != (SQLPOINTER)SQL_RD_ON && value != (SQLPOINTER)SQL_RD_OFF) {
-      logMessage(cnct, "SQLSetStmtAttr: Invalid retrieve data option specified", LOG_LEVEL_ERROR);
-      stmt->addDiagnostic("HY024", "Invalid retrieve data option");
+    if (value != reinterpret_cast<SQLPOINTER>(SQL_RD_ON)) {
+      stmt->addDiagnostic("HYC00", "Disabling data retrieval is not supported");
       return SQL_ERROR;
     }
     stmt->retrieveData = static_cast<SQLINTEGER>(reinterpret_cast<intptr_t>(value));
@@ -4926,10 +6160,8 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
 
   case SQL_ATTR_METADATA_ID:
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_METADATA_ID", LOG_LEVEL_DEBUG);
-    // Set metadata ID mode
-    if (value != (SQLPOINTER)SQL_TRUE && value != (SQLPOINTER)SQL_FALSE) {
-      logMessage(cnct, "SQLSetStmtAttr: Invalid metadata ID option specified", LOG_LEVEL_ERROR);
-      stmt->addDiagnostic("HY024", "Invalid metadata ID option");
+    if (value != reinterpret_cast<SQLPOINTER>(SQL_FALSE)) {
+      stmt->addDiagnostic("HYC00", "Identifier-based catalog arguments are not supported");
       return SQL_ERROR;
     }
     stmt->metadataId = static_cast<SQLINTEGER>(reinterpret_cast<intptr_t>(value));
@@ -4937,19 +6169,13 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
     break;
 
   case SQL_ATTR_ASYNC_STMT_EVENT:
-    logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_ASYNC_STMT_EVENT", LOG_LEVEL_DEBUG);
-    // TODO: Implement async statement event functionality
-    // Note: This is for asynchronous statement operations
-    logMessage(cnct, "SQLSetStmtAttr: Async statement event setting is not yet implemented",
-               LOG_LEVEL_WARN);
-    break;
+    stmt->addDiagnostic("HYC00", "Asynchronous statements are not supported");
+    return SQL_ERROR;
 
   case SQL_ATTR_ENABLE_AUTO_IPD:
     logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_ENABLE_AUTO_IPD", LOG_LEVEL_DEBUG);
-    // Set whether to enable automatic IPD
-    if (value != (SQLPOINTER)SQL_TRUE && value != (SQLPOINTER)SQL_FALSE) {
-      logMessage(cnct, "SQLSetStmtAttr: Invalid auto IPD option specified", LOG_LEVEL_ERROR);
-      stmt->addDiagnostic("HY024", "Invalid auto IPD option");
+    if (value != reinterpret_cast<SQLPOINTER>(SQL_FALSE)) {
+      stmt->addDiagnostic("HYC00", "Automatic parameter descriptors are not supported");
       return SQL_ERROR;
     }
     stmt->enableAutoIPD = static_cast<SQLINTEGER>(reinterpret_cast<intptr_t>(value));
@@ -4959,29 +6185,14 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
   // Note: The following attributes are not fully implemented as their exact behavior
   // may vary by database system or require additional context
   case SQL_ATTR_IMP_ROW_DESC:
-    logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_IMP_ROW_DESC", LOG_LEVEL_DEBUG);
-    // TODO: Implement implementation row descriptor functionality
-    // Note: This typically points to an implementation descriptor
-    logMessage(cnct,
-               "SQLSetStmtAttr: Implementation row descriptor setting is not yet fully implemented",
-               LOG_LEVEL_WARN);
-    break;
-
   case SQL_ATTR_IMP_PARAM_DESC:
-    logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_IMP_PARAM_DESC", LOG_LEVEL_DEBUG);
-    // TODO: Implement implementation parameter descriptor functionality
-    // Note: This typically points to an implementation descriptor
-    logMessage(
-        cnct,
-        "SQLSetStmtAttr: Implementation parameter descriptor setting is not yet fully implemented",
-        LOG_LEVEL_WARN);
-    break;
+    stmt->addDiagnostic("HY092", "Implementation descriptor attributes are read-only");
+    return SQL_ERROR;
 
   case SQL_ATTR_ROW_BIND_OFFSET_PTR:
-    logMessage(cnct, "SQLSetStmtAttr: Processing SQL_ATTR_ROW_BIND_OFFSET_PTR", LOG_LEVEL_DEBUG);
-    // Store pointer to row bind offset
     stmt->rowBindOffsetPtr = static_cast<SQLULEN*>(value);
-    logMessage(cnct, "SQLSetStmtAttr: Row bind offset pointer set", LOG_LEVEL_DEBUG);
+    static_cast<DescriptorHandle*>(stmt->appRowDesc)->bindOffsetPtr =
+        reinterpret_cast<SQLLEN*>(value);
     break;
 
   case SQL_ATTR_MAX_LENGTH:
@@ -5007,13 +6218,67 @@ SQLRETURN SQL_API SQLSetStmtOption(SQLHSTMT statementHandle, SQLUSMALLINT option
     logMessage(nullptr, "SQLSetStmtOption: Invalid statement handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
-  auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLSetStmtOption is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLSetStmtOption Function not implemented");
+  SQLINTEGER attribute = 0;
+  switch (option) {
+  case SQL_QUERY_TIMEOUT:
+    attribute = SQL_ATTR_QUERY_TIMEOUT;
+    break;
+  case SQL_MAX_ROWS:
+    attribute = SQL_ATTR_MAX_ROWS;
+    break;
+  case SQL_NOSCAN:
+    attribute = SQL_ATTR_NOSCAN;
+    break;
+  case SQL_MAX_LENGTH:
+    attribute = SQL_ATTR_MAX_LENGTH;
+    break;
+  case SQL_BIND_TYPE:
+    attribute = SQL_ATTR_ROW_BIND_TYPE;
+    break;
+  case SQL_CURSOR_TYPE:
+    attribute = SQL_ATTR_CURSOR_TYPE;
+    break;
+  case SQL_CONCURRENCY:
+    attribute = SQL_ATTR_CONCURRENCY;
+    break;
+  case SQL_ROWSET_SIZE:
+    attribute = SQL_ATTR_ROW_ARRAY_SIZE;
+    break;
+  case SQL_RETRIEVE_DATA:
+    attribute = SQL_ATTR_RETRIEVE_DATA;
+    break;
+  case SQL_USE_BOOKMARKS:
+    attribute = SQL_ATTR_USE_BOOKMARKS;
+    break;
+  default:
+    auto* stmt = static_cast<StatementHandle*>(statementHandle);
+    stmt->clearDiagnostics();
+    stmt->addDiagnostic("HY092", "Invalid attribute/option identifier");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  return SQLSetStmtAttr(statementHandle, attribute, reinterpret_cast<SQLPOINTER>(value), 0);
+}
+
+static SQLRETURN SetEmptyCatalogResult(StatementHandle* stmt,
+                                       const std::vector<std::string>& columnNames,
+                                       const std::vector<std::string>& columnTypes) {
+  stmt->ClearResultSet();
+  stmt->AllocateSessionResultSet();
+  if (!stmt->resultSetPtr) {
+    stmt->addDiagnostic("HY001", "Unable to allocate catalog result set");
+    return SQL_ERROR;
+  }
+  stmt->resultSetPtr->clear();
+  stmt->resultSetPtr->columnNames = columnNames;
+  stmt->resultSetPtr->columnTypes = columnTypes;
+  stmt->resultSetPtr->numColumns = static_cast<int>(columnNames.size());
+  stmt->resultSetPtr->numRows = 0;
+  stmt->resultSetPtr->isMetaData = true;
+  stmt->curRow = -1;
+  stmt->rowsReturned = 0;
+  stmt->isQuery = true;
+  PopulateImplementationRowDescriptor(stmt);
+  return SQL_SUCCESS;
 }
 
 SQLRETURN SQL_API SQLSpecialColumns(SQLHSTMT statementHandle, SQLUSMALLINT identifierType,
@@ -5025,13 +6290,31 @@ SQLRETURN SQL_API SQLSpecialColumns(SQLHSTMT statementHandle, SQLUSMALLINT ident
     logMessage(nullptr, "SQLSpecialColumns: Invalid statement handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
-  auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLSpecialColumns is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLSpecialColumns Function not implemented");
+  auto* stmt = static_cast<StatementHandle*>(statementHandle);
+  stmt->clearDiagnostics();
+  if (identifierType != SQL_BEST_ROWID && identifierType != SQL_ROWVER) {
+    stmt->addDiagnostic("HY097", "Column type out of range");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  if (scope != SQL_SCOPE_CURROW && scope != SQL_SCOPE_TRANSACTION && scope != SQL_SCOPE_SESSION) {
+    stmt->addDiagnostic("HY098", "Scope type out of range");
+    return SQL_ERROR;
+  }
+  if (nullable != SQL_NO_NULLS && nullable != SQL_NULLABLE) {
+    stmt->addDiagnostic("HY099", "Nullable type out of range");
+    return SQL_ERROR;
+  }
+  (void)catalogName;
+  (void)nameLength1;
+  (void)schemaName;
+  (void)nameLength2;
+  (void)tableName;
+  (void)nameLength3;
+  return SetEmptyCatalogResult(
+      stmt,
+      {"SCOPE", "COLUMN_NAME", "DATA_TYPE", "TYPE_NAME", "COLUMN_SIZE", "BUFFER_LENGTH",
+       "DECIMAL_DIGITS", "PSEUDO_COLUMN"},
+      {"INT16", "TEXT", "INT16", "TEXT", "INT32", "INT32", "INT16", "INT16"});
 }
 
 SQLRETURN SQL_API SQLStatistics(SQLHSTMT statementHandle, SQLCHAR* catalogName,
@@ -5043,13 +6326,31 @@ SQLRETURN SQL_API SQLStatistics(SQLHSTMT statementHandle, SQLCHAR* catalogName,
     logMessage(nullptr, "SQLStatistics: Invalid statement handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
-  auto stmt = static_cast<StatementHandle*>(statementHandle);
-  ConnectionHandle* cnct = stmt ? stmt->getConnection() : nullptr;
-  logMessage(cnct, "SQLStatistics is not implemented", LOG_LEVEL_ERROR);
-  if (stmt) {
-    stmt->addDiagnostic("IM001", "SQLStatistics Function not implemented");
+  auto* stmt = static_cast<StatementHandle*>(statementHandle);
+  stmt->clearDiagnostics();
+  if (unique != SQL_INDEX_UNIQUE && unique != SQL_INDEX_ALL) {
+    stmt->addDiagnostic("HY100", "Uniqueness option type out of range");
+    return SQL_ERROR;
   }
-  return SQL_ERROR;
+  if (reserved != SQL_ENSURE && reserved != SQL_QUICK) {
+    stmt->addDiagnostic("HY101", "Accuracy option type out of range");
+    return SQL_ERROR;
+  }
+  (void)catalogName;
+  (void)nameLength1;
+  (void)schemaName;
+  (void)nameLength2;
+  (void)tableName;
+  (void)nameLength3;
+  // IoTDB exposes no relational indexes through ODBC, so the conformant
+  // catalog result has the required schema and zero rows.
+  return SetEmptyCatalogResult(stmt,
+                               {"TABLE_CAT", "TABLE_SCHEM", "TABLE_NAME", "NON_UNIQUE",
+                                "INDEX_QUALIFIER", "INDEX_NAME", "TYPE", "ORDINAL_POSITION",
+                                "COLUMN_NAME", "ASC_OR_DESC", "CARDINALITY", "PAGES",
+                                "FILTER_CONDITION"},
+                               {"TEXT", "TEXT", "TEXT", "INT16", "TEXT", "TEXT", "INT16", "INT16",
+                                "TEXT", "TEXT", "INT32", "INT32", "TEXT"});
 }
 
 /*
@@ -5231,7 +6532,7 @@ SQLRETURN SQL_API SQLTables(SQLHSTMT statementHandle, SQLCHAR* catalogName, SQLS
       sqlCommand += " AND table_name LIKE '" + tableStr + "'";
     }
 
-    logMessage(cnct, "SQLTables: Executing query: " + sqlCommand, LOG_LEVEL_DEBUG);
+    logMessage(cnct, "SQLTables: Executing metadata query", LOG_LEVEL_DEBUG);
     SQLRETURN ret = SQLExecDirect(statementHandle, (SQLCHAR*)sqlCommand.data(), SQL_NTS);
     if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
       logMessage(cnct, "SQLTables: Query completed unsuccessfully", LOG_LEVEL_ERROR);
@@ -5257,7 +6558,7 @@ SQLRETURN SQL_API SQLTables(SQLHSTMT statementHandle, SQLCHAR* catalogName, SQLS
     }
     sqlCommand += " WITH DATABASE";
 
-    logMessage(cnct, "SQLTables: Executing query: " + sqlCommand, LOG_LEVEL_DEBUG);
+    logMessage(cnct, "SQLTables: Executing metadata query", LOG_LEVEL_DEBUG);
     SQLRETURN ret = SQLExecDirect(statementHandle, (SQLCHAR*)sqlCommand.data(), SQL_NTS);
     if (ret != SQL_SUCCESS && ret != SQL_SUCCESS_WITH_INFO) {
       logMessage(cnct, "SQLTables: Query completed unsuccessfully", LOG_LEVEL_ERROR);
@@ -5318,15 +6619,9 @@ SQLRETURN SQL_API SQLTransact(SQLHENV environmentHandle, SQLHDBC connectionHandl
     logMessage(nullptr, "SQLTransact: Invalid environment/connection handle", LOG_LEVEL_ERROR);
     return SQL_INVALID_HANDLE;
   }
-  auto env = static_cast<EnvironmentHandle*>(environmentHandle);
-  auto cnct = static_cast<ConnectionHandle*>(connectionHandle);
-  logMessage(nullptr, "SQLTransact is not implemented", LOG_LEVEL_ERROR);
-  if (env) {
-    env->addDiagnostic("IM001", "SQLTransact Function not implemented");
-  } else if (cnct) {
-    cnct->addDiagnostic("IM001", "SQLTransact Function not implemented");
-  }
-  return SQL_ERROR;
+  if (connectionHandle)
+    return SQLEndTran(SQL_HANDLE_DBC, connectionHandle, completionType);
+  return SQLEndTran(SQL_HANDLE_ENV, environmentHandle, completionType);
 }
 
 // sqlext.h
@@ -5363,6 +6658,10 @@ SQLRETURN SQL_API SQLDriverConnect(SQLHDBC connectionHandle, SQLHWND windowHandl
     cnct->addDiagnostic("HY090", "Invalid connection string length");
     return SQL_ERROR;
   }
+  if (bufferLength < 0) {
+    cnct->addDiagnostic("HY090", "Invalid output buffer length");
+    return SQL_ERROR;
+  }
   std::string connectionString((const char*)inConnectionString,
                                inConnectionStringLength == SQL_NTS
                                    ? strlen((const char*)inConnectionString)
@@ -5390,6 +6689,7 @@ SQLRETURN SQL_API SQLDriverConnect(SQLHDBC connectionHandle, SQLHWND windowHandl
                "SQLDriverConnect: Extracted DSN='" + dsnName +
                    "', hasDriver=" + (hasDriverKeyword ? "true" : "false"),
                LOG_LEVEL_DEBUG);
+    cnct->dataSourceName = dsnName;
 
     // --- Phase 2: if DSN is specified and no DRIVER keyword, load from ODBC.INI ---
     if (!dsnName.empty() && !hasDriverKeyword) {
@@ -5417,11 +6717,17 @@ SQLRETURN SQL_API SQLDriverConnect(SQLHDBC connectionHandle, SQLHWND windowHandl
       logMessage(cnct, oss.str(), LOG_LEVEL_INFO);
     }
 
+    bool outputTruncated = false;
+    if (outConnectionStringLengthPtr) {
+      *outConnectionStringLengthPtr = static_cast<SQLSMALLINT>(std::min(
+          connectionString.size(), static_cast<size_t>(std::numeric_limits<SQLSMALLINT>::max())));
+    }
     if (outConnectionString && bufferLength > 0) {
-      std::snprintf((char*)outConnectionString, bufferLength, "%s", connectionString.c_str());
-      if (outConnectionStringLengthPtr) {
-        *outConnectionStringLengthPtr = (SQLSMALLINT)strlen((char*)outConnectionString);
-      }
+      const size_t copyLength =
+          std::min(connectionString.size(), static_cast<size_t>(bufferLength - 1));
+      std::memcpy(outConnectionString, connectionString.data(), copyLength);
+      outConnectionString[copyLength] = '\0';
+      outputTruncated = copyLength < connectionString.size();
       logMessage(cnct, "SQLDriverConnect: Copied connection string to output buffer",
                  LOG_LEVEL_DEBUG);
     }
@@ -5444,6 +6750,10 @@ SQLRETURN SQL_API SQLDriverConnect(SQLHDBC connectionHandle, SQLHWND windowHandl
 
     logMessage(cnct, "SQLDriverConnect: Exiting with return code: " + std::to_string(returnCode),
                LOG_LEVEL_TRACE);
+    if (SQL_SUCCEEDED(returnCode) && outputTruncated) {
+      cnct->addDiagnostic("01004", "Connection string data was truncated");
+      return SQL_SUCCESS_WITH_INFO;
+    }
     return returnCode;
   } catch (const std::exception& e) {
     cnct->addDiagnostic("08001", e.what());

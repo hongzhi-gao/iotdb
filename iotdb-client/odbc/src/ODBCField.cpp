@@ -564,13 +564,10 @@ bool ODBCField::toBinary(SQLCHAR* target, SQLLEN bufferLength, SQLLEN* strLen_or
       *strLen_or_IndPtr = SQL_NULL_DATA;
     return true;
   }
-  logMessage("ODBCField::toBinary: get field_.dataType=" + TSDataTypeName(field_.dataType));
   // For BLOB data, decode the hex string (e.g. "0x506C...") into raw bytes
   if (field_.dataType == TSDataType::BLOB && field_.stringV.is_initialized()) {
     const std::string& raw = field_.stringV.value();
-    logMessage("ODBCField::toBinary: get raw blob string length=" + std::to_string(raw.size()));
     // Strip optional "0x"/"0X" prefix
-    logMessage("ODBCField::toBinary: get raw blob string=" + raw);
     std::string hex = raw;
     if (hex.size() >= 2 && hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X')) {
       hex = hex.substr(2);

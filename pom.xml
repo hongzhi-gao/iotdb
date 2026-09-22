@@ -768,8 +768,7 @@
                             <exclude>**/package-metadata/third_party/licenses/**</exclude>
                             <!-- generated certificates and private keys used only by C++ TLS tests -->
                             <exclude>**/client-cpp/test/fixtures/**</exclude>
-                            <!-- Imported third-party sources retain their original licenses. -->
-                            <exclude>iotdb-client/odbc/deps/**</exclude>
+                            <!-- Bundled license texts for the ODBC binary package. -->
                             <exclude>iotdb-client/odbc/licenses/**</exclude>
                             <exclude>test/fixtures/**/*.crt</exclude>
                             <exclude>test/fixtures/**/*.key</exclude>

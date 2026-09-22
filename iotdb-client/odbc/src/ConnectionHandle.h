@@ -30,6 +30,8 @@
 #include <Session.h>
 #include <TableSession.h>
 
+class StatementHandle;
+
 class ConnectionHandle : public ODBCHandle {
 public:
   ConnectionHandle(EnvironmentHandle* environment);
@@ -47,11 +49,14 @@ public:
   SQLUINTEGER timeoutLogin;
   SQLUINTEGER timeoutConnection;
   std::string database;
+  std::string dataSourceName;
+  std::vector<StatementHandle*> statements;
   int logLevel;
   bool isTableModel;
   bool useRestful;
   SslConfig sslConfig;
   bool invalidSslValue = false;
+  bool invalidRestfulValue = false;
   void ValidateTransport() const;
   void OpenSession();
   SQLBIGINT sessionTimeoutMs;

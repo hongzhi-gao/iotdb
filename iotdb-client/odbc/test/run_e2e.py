@@ -53,7 +53,8 @@ def main():
     env = os.environ.copy()
     env["IOTDB_NO_PAUSE"] = "1"
 
-    def check(options, sql="SHOW VERSION", failure=False, rows=None, value=None):
+    def check(options, sql="SHOW VERSION", failure=False, rows=None, value=None,
+              parameter_ints=None):
         run_env = env.copy()
         run_env["IOTDB_ODBC_CONNECTION"] = (
             "SERVER=localhost;PORT=6667;UID=root;PWD={" + password.replace("}", "}}") + "};"
@@ -63,10 +64,13 @@ def main():
         run_env.pop("IOTDB_ODBC_EXPECT_FAILURE", None)
         run_env.pop("IOTDB_ODBC_EXPECT_ROWS", None)
         run_env.pop("IOTDB_ODBC_EXPECT_VALUE", None)
+        run_env.pop("IOTDB_ODBC_PARAMETER_INTS", None)
         if rows is not None:
             run_env["IOTDB_ODBC_EXPECT_ROWS"] = str(rows)
         if value is not None:
             run_env["IOTDB_ODBC_EXPECT_VALUE"] = value
+        if parameter_ints is not None:
+            run_env["IOTDB_ODBC_PARAMETER_INTS"] = ",".join(str(value) for value in parameter_ints)
         if failure:
             run_env["IOTDB_ODBC_EXPECT_FAILURE"] = "1"
         subprocess.run([str(manager), str(driver)], env=run_env, check=True, timeout=90)
@@ -111,7 +115,9 @@ def main():
                 check(tls + "ISTABLEMODEL=1;DATABASE=information_schema;")
                 check(tls + "ISTABLEMODEL=0;", "CREATE DATABASE root.odbc_migration")
                 check(tls + "ISTABLEMODEL=0;", "INSERT INTO root.odbc_migration.d(time,v) VALUES(1,1),(2,2),(3,3)")
-                check(tls + "ISTABLEMODEL=0;", "SELECT v FROM root.odbc_migration.d", rows=3)
+                check(tls + "ISTABLEMODEL=0;", "INSERT INTO root.odbc_migration.d(time,v) VALUES(?,42)",
+                      parameter_ints=[4, 5])
+                check(tls + "ISTABLEMODEL=0;", "SELECT v FROM root.odbc_migration.d", rows=5)
                 check(tls + "ISTABLEMODEL=0;", "DELETE DATABASE root.odbc_migration")
                 table = tls + "ISTABLEMODEL=1;DATABASE=information_schema;"
                 check(table, "CREATE DATABASE odbc_migration")

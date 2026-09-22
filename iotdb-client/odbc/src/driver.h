@@ -51,6 +51,11 @@ SQLRETURN SQL_API SQLBindParam(SQLHSTMT StatementHandle, SQLUSMALLINT ParameterN
                                SQLSMALLINT ValueType, SQLSMALLINT ParameterType,
                                SQLULEN LengthPrecision, SQLSMALLINT ParameterScale,
                                SQLPOINTER ParameterValue, SQLLEN* StrLen_or_Ind);
+SQLRETURN SQL_API SQLBindParameter(SQLHSTMT StatementHandle, SQLUSMALLINT ParameterNumber,
+                                   SQLSMALLINT InputOutputType, SQLSMALLINT ValueType,
+                                   SQLSMALLINT ParameterType, SQLULEN ColumnSize,
+                                   SQLSMALLINT DecimalDigits, SQLPOINTER ParameterValuePtr,
+                                   SQLLEN BufferLength, SQLLEN* StrLen_or_IndPtr);
 SQLRETURN SQL_API SQLCancel(SQLHSTMT StatementHandle);
 SQLRETURN SQL_API SQLCancelHandle(SQLSMALLINT HandleType, SQLHANDLE InputHandle);
 SQLRETURN SQL_API SQLCloseCursor(SQLHSTMT StatementHandle);
@@ -62,8 +67,6 @@ SQLRETURN SQL_API SQLColumns(SQLHSTMT StatementHandle, SQLCHAR* CatalogName,
                              SQLSMALLINT NameLength1, SQLCHAR* SchemaName, SQLSMALLINT NameLength2,
                              SQLCHAR* TableName, SQLSMALLINT NameLength3, SQLCHAR* ColumnName,
                              SQLSMALLINT NameLength4);
-SQLRETURN SQL_API SQLCompleteAsync(SQLSMALLINT HandleType, SQLHANDLE Handle,
-                                   RETCODE* AsyncRetCodePtr);
 SQLRETURN SQL_API SQLConnect(SQLHDBC ConnectionHandle, SQLCHAR* ServerName, SQLSMALLINT NameLength1,
                              SQLCHAR* UserName, SQLSMALLINT NameLength2, SQLCHAR* Password,
                              SQLSMALLINT NameLength3);
@@ -127,6 +130,10 @@ SQLRETURN SQL_API SQLGetStmtAttr(SQLHSTMT StatementHandle, SQLINTEGER Attribute,
 SQLRETURN SQL_API SQLGetStmtOption(SQLHSTMT StatementHandle, SQLUSMALLINT Option, SQLPOINTER Value);
 SQLRETURN SQL_API SQLGetTypeInfo(SQLHSTMT StatementHandle, SQLSMALLINT DataType);
 SQLRETURN SQL_API SQLNumResultCols(SQLHSTMT StatementHandle, SQLSMALLINT* ColumnCount);
+SQLRETURN SQL_API SQLNumParams(SQLHSTMT StatementHandle, SQLSMALLINT* ParameterCountPtr);
+SQLRETURN SQL_API SQLNativeSql(SQLHDBC ConnectionHandle, SQLCHAR* InStatementText,
+                               SQLINTEGER TextLength1, SQLCHAR* OutStatementText,
+                               SQLINTEGER BufferLength, SQLINTEGER* TextLength2Ptr);
 SQLRETURN SQL_API SQLParamData(SQLHSTMT StatementHandle, SQLPOINTER* Value);
 SQLRETURN SQL_API SQLPrepare(SQLHSTMT StatementHandle, SQLCHAR* StatementText,
                              SQLINTEGER TextLength);

@@ -71,10 +71,7 @@ SQLSMALLINT streamNextBatch(StatementHandle* stmt) {
 
   newStatementTextss << stmt->statementText << " OFFSET " << stmt->streamCurRow << " LIMIT 9000";
 
-  if (isLogLevelEnabled(cnct, LOG_LEVEL_DEBUG)) {
-    logMessage(cnct, "streamNextBatch: Executing query: " + newStatementTextss.str(),
-               LOG_LEVEL_DEBUG);
-  }
+  logMessage(cnct, "streamNextBatch: Executing the next query batch", LOG_LEVEL_DEBUG);
   SQLRETURN ret = IoTDB_ExecDirect(stmt, newStatementTextss.str(), false);
   if (ret == SQL_NO_DATA) {
     logMessage(cnct, "streamNextBatch: Streaming ended. returning SQL_NO_DATA", LOG_LEVEL_ERROR);
@@ -96,12 +93,14 @@ void StatementHandle::AllocateSessionResultSet() {
   logMessage(getConnection(), "StatementHandle::AllocateSessionResultSet: Entering",
              LOG_LEVEL_TRACE);
   resultSetPtr = std::make_shared<ODBCSessionResultSet>(this);
+  resultSetPtr->bindColInfo = columnBindings;
   logMessage(getConnection(), "StatementHandle::AllocateSessionResultSet: Exiting",
              LOG_LEVEL_TRACE);
 }
 void StatementHandle::AllocateRestResultSet() {
   logMessage(getConnection(), "StatementHandle::AllocateRestResultSet: Entering", LOG_LEVEL_TRACE);
   resultSetPtr = std::make_shared<ODBCRestResultSet>(this);
+  resultSetPtr->bindColInfo = columnBindings;
   logMessage(getConnection(), "StatementHandle::AllocateRestResultSet: Exiting", LOG_LEVEL_TRACE);
 }
 void StatementHandle::ClearResultSet() {

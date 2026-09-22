@@ -28,27 +28,26 @@
 #include <locale>
 #include <stdexcept>
 #include <algorithm>
+#include <sstream>
+#include <vector>
 
 #ifdef _WIN32
-// Windows' driver manager requires a registered name. Redirect HKLM for this
-// process only, using a disposable user-owned key; never install a system driver.
-class DriverRegistrySandbox {
-  HKEY root_ = nullptr;
+// Use a disposable user DSN so the test exercises the Windows Driver Manager
+// without changing machine-wide driver registration or redirecting HKLM.
+class UserDsnSandbox {
   std::string path_;
-  bool redirected_ = false;
+  std::string name_;
 
 public:
-  explicit DriverRegistrySandbox(std::string dll) {
+  explicit UserDsnSandbox(std::string dll) {
     std::replace(dll.begin(), dll.end(), '/', '\\');
-    path_ = "Software\\IoTDBOdbcTest-" + std::to_string(GetCurrentProcessId()) + "-" +
-            std::to_string(GetTickCount64());
-    if (RegCreateKeyExA(HKEY_CURRENT_USER, path_.c_str(), 0, nullptr, REG_OPTION_VOLATILE,
-                        KEY_ALL_ACCESS, nullptr, &root_, nullptr) != ERROR_SUCCESS)
-      throw std::runtime_error("Cannot create temporary registry sandbox");
-    auto write = [&](const char* path, const char* name, const std::string& value) {
+    name_ =
+        "IoTDB-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(GetTickCount64());
+    path_ = "Software\\ODBC\\ODBC.INI\\" + name_;
+    auto write = [&](const std::string& path, const char* name, const std::string& value) {
       HKEY key = nullptr;
-      LONG rc = RegCreateKeyExA(root_, path, 0, nullptr, REG_OPTION_VOLATILE, KEY_ALL_ACCESS,
-                                nullptr, &key, nullptr);
+      LONG rc = RegCreateKeyExA(HKEY_CURRENT_USER, path.c_str(), 0, nullptr, REG_OPTION_VOLATILE,
+                                KEY_ALL_ACCESS, nullptr, &key, nullptr);
       if (rc == ERROR_SUCCESS) {
         rc = RegSetValueExA(key, name, 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()),
                             static_cast<DWORD>(value.size() + 1));
@@ -56,25 +55,23 @@ public:
       }
       return rc == ERROR_SUCCESS;
     };
-    if (!write("Software\\ODBC\\ODBCINST.INI\\IoTDBMigrationTest", "Driver", dll) ||
-        !write("Software\\ODBC\\ODBCINST.INI\\ODBC Drivers", "IoTDBMigrationTest", "Installed") ||
-        RegOverridePredefKey(HKEY_LOCAL_MACHINE, root_) != ERROR_SUCCESS) {
-      RegCloseKey(root_);
+    if (!write(path_, "Driver", dll) || !write("Software\\ODBC\\ODBC.INI\\ODBC Data Sources",
+                                               name_.c_str(), "Apache IoTDB ODBC Driver")) {
       RegDeleteTreeA(HKEY_CURRENT_USER, path_.c_str());
-      throw std::runtime_error("Cannot configure process-local ODBC registry");
+      throw std::runtime_error("Cannot configure temporary user DSN");
     }
-    redirected_ = true;
   }
-  void restore() {
-    if (redirected_)
-      RegOverridePredefKey(HKEY_LOCAL_MACHINE, nullptr);
-    redirected_ = false;
+  const std::string& name() const {
+    return name_;
   }
-  ~DriverRegistrySandbox() {
-    restore();
-    if (root_)
-      RegCloseKey(root_);
+  ~UserDsnSandbox() {
     RegDeleteTreeA(HKEY_CURRENT_USER, path_.c_str());
+    HKEY sources = nullptr;
+    if (RegOpenKeyExA(HKEY_CURRENT_USER, "Software\\ODBC\\ODBC.INI\\ODBC Data Sources", 0,
+                      KEY_SET_VALUE, &sources) == ERROR_SUCCESS) {
+      RegDeleteValueA(sources, name_.c_str());
+      RegCloseKey(sources);
+    }
   }
 };
 #endif
@@ -98,8 +95,7 @@ int runTest(int argc, char** argv) {
     return 2;
   std::string driver = argv[1];
 #ifdef _WIN32
-  DriverRegistrySandbox registry(driver);
-  driver = "IoTDBMigrationTest";
+  UserDsnSandbox dsn(driver);
 #endif
   SQLHENV env = nullptr;
   SQLHDBC dbc = nullptr;
@@ -110,20 +106,22 @@ int runTest(int argc, char** argv) {
     return 1;
   std::string optionsText = utf8Environment("IOTDB_ODBC_CONNECTION");
   const char* options = optionsText.empty() ? nullptr : optionsText.c_str();
+  const bool traceStages = !utf8Environment("IOTDB_ODBC_TRACE_STAGES").empty();
+  auto stage = [&](const char* text) {
+    if (traceStages)
+      std::cerr << text << std::endl;
+  };
 #ifdef _WIN32
-  if (options) {
-    // Attach the driver to this manager handle without opening a socket. Restore
-    // HKLM before real I/O so CryptoAPI and Winsock see their normal OS settings.
-    std::string prime = "DRIVER={" + driver + "};SSL=invalid;";
-    SQLDriverConnect(dbc, nullptr, reinterpret_cast<SQLCHAR*>(&prime[0]), SQL_NTS, nullptr, 0,
-                     nullptr, SQL_DRIVER_NOPROMPT);
-    registry.restore();
-  }
-#endif
+  std::string conn =
+      "DSN=" + dsn.name() + ";SSL=0;" + (options ? options : "RESTFUL=1;SSL=1;SSLCA=missing.pem");
+#else
   std::string conn = std::string("DRIVER={") + driver + "};SSL=0;" +
                      (options ? options : "RESTFUL=1;SSL=1;SSLCA=missing.pem");
+#endif
+  stage("driver-connect");
   SQLRETURN rc = SQLDriverConnect(dbc, nullptr, reinterpret_cast<SQLCHAR*>(&conn[0]), SQL_NTS,
                                   nullptr, 0, nullptr, SQL_DRIVER_NOPROMPT);
+  stage("driver-connect-returned");
   bool expectedFailure = !options || std::getenv("IOTDB_ODBC_EXPECT_FAILURE");
   bool ok = false;
   if (expectedFailure) {
@@ -136,11 +134,45 @@ int runTest(int argc, char** argv) {
       std::cerr << state << ": " << message << '\n';
   } else if (SQL_SUCCEEDED(rc)) {
     SQLHSTMT stmt = nullptr;
+    stage("allocate-statement");
     SQLAllocHandle(SQL_HANDLE_STMT, dbc, &stmt);
     std::string queryText = utf8Environment("IOTDB_ODBC_QUERY");
     const char* query = queryText.empty() ? nullptr : queryText.c_str();
     std::string sql = query ? query : "SHOW VERSION";
-    rc = SQLExecDirect(stmt, reinterpret_cast<SQLCHAR*>(&sql[0]), SQL_NTS);
+    std::string parameterText = utf8Environment("IOTDB_ODBC_PARAMETER_INTS");
+    stage("execute");
+    if (parameterText.empty()) {
+      rc = SQLExecDirect(stmt, reinterpret_cast<SQLCHAR*>(&sql[0]), SQL_NTS);
+    } else {
+      std::vector<SQLINTEGER> parameters;
+      std::stringstream values(parameterText);
+      std::string item;
+      while (std::getline(values, item, ','))
+        parameters.push_back(static_cast<SQLINTEGER>(std::stol(item)));
+      std::vector<SQLLEN> lengths(parameters.size(), sizeof(SQLINTEGER));
+      std::vector<SQLUSMALLINT> statuses(parameters.size(), SQL_PARAM_UNUSED);
+      SQLULEN processed = 0;
+      SQLSetStmtAttr(stmt, SQL_ATTR_PARAMSET_SIZE, reinterpret_cast<SQLPOINTER>(parameters.size()),
+                     0);
+      SQLSetStmtAttr(stmt, SQL_ATTR_PARAM_STATUS_PTR, statuses.data(), 0);
+      SQLSetStmtAttr(stmt, SQL_ATTR_PARAMS_PROCESSED_PTR, &processed, 0);
+      rc = SQLPrepare(stmt, reinterpret_cast<SQLCHAR*>(&sql[0]), SQL_NTS);
+      if (SQL_SUCCEEDED(rc))
+        rc = SQLBindParameter(stmt, 1, SQL_PARAM_INPUT, SQL_C_SLONG, SQL_INTEGER, 10, 0,
+                              parameters.data(), sizeof(SQLINTEGER), lengths.data());
+      if (SQL_SUCCEEDED(rc))
+        rc = SQLExecute(stmt);
+      if (SQL_SUCCEEDED(rc))
+        rc = processed == parameters.size() &&
+                     std::all_of(statuses.begin(), statuses.end(),
+                                 [](SQLUSMALLINT status) {
+                                   return status == SQL_PARAM_SUCCESS ||
+                                          status == SQL_PARAM_SUCCESS_WITH_INFO;
+                                 })
+                 ? rc
+                 : SQL_ERROR;
+    }
+    stage("execute-returned");
     if (SQL_SUCCEEDED(rc)) {
       SQLSMALLINT columns = 0;
       SQLNumResultCols(stmt, &columns);
@@ -149,7 +181,8 @@ int runTest(int argc, char** argv) {
       bool foundValue = false;
       std::string expectedText = utf8Environment("IOTDB_ODBC_EXPECT_VALUE");
       const char* expectedValue = expectedText.empty() ? nullptr : expectedText.c_str();
-      while (SQL_SUCCEEDED(rc = SQLFetch(stmt))) {
+      while (stage("fetch"), SQL_SUCCEEDED(rc = SQLFetch(stmt))) {
+        stage("fetch-returned-row");
         ++rows;
         for (SQLUSMALLINT col = 1; col <= columns; ++col) {
           SQLCHAR value[4096]{};
@@ -168,8 +201,11 @@ int runTest(int argc, char** argv) {
       if (expectedValue)
         ok = ok && foundValue;
     }
+    stage("free-statement");
     SQLFreeHandle(SQL_HANDLE_STMT, stmt);
+    stage("disconnect");
     SQLDisconnect(dbc);
+    stage("disconnect-returned");
   } else {
     SQLCHAR state[6]{}, message[1024]{};
     SQLINTEGER native{};
@@ -177,8 +213,11 @@ int runTest(int argc, char** argv) {
     SQLGetDiagRec(SQL_HANDLE_DBC, dbc, 1, state, &native, message, sizeof(message), &length);
     std::cerr << state << ": " << message << '\n';
   }
+  stage("free-connection");
   SQLFreeHandle(SQL_HANDLE_DBC, dbc);
+  stage("free-environment");
   SQLFreeHandle(SQL_HANDLE_ENV, env);
+  stage("done");
   return ok ? 0 : 1;
 }
 

@@ -31,9 +31,9 @@ struct BindColInfo {
   SQLLEN bufferLength;       // Buffer length
   SQLLEN* strLen_or_IndPtr;  // Length/indicator pointer
   bool isBound;              // Whether bound
-  BindColInfo() {
-    isBound = false;
-  }
+  BindColInfo()
+      : targetType(SQL_C_DEFAULT), targetValuePtr(nullptr), bufferLength(0),
+        strLen_or_IndPtr(nullptr), isBound(false) {}
 };
 
 class ODBCResultSet {

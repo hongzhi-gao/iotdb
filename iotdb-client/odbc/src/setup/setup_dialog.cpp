@@ -83,7 +83,7 @@ void ReadDsnFromOdbcIni(const std::string& dsnName, DsnInfo& info) {
   info.pwd = ReadOdbcIniString(dsnName, "PWD", "root");
   info.database = ReadOdbcIniString(dsnName, "DATABASE", "");
   info.isTableModel = ReadOdbcIniString(dsnName, "ISTABLEMODEL", "1");
-  info.logLevel = ReadOdbcIniString(dsnName, "LOGLEVEL", "4");
+  info.logLevel = ReadOdbcIniString(dsnName, "LOGLEVEL", "0");
   info.sessionTimeoutMs = ReadOdbcIniString(dsnName, "SESSIONTIMEOUTMS", "0");
   info.batchSize = ReadOdbcIniString(dsnName, "BATCHSIZE", "1000");
   info.ssl = ReadOdbcIniString(dsnName, "SSL", "0");
@@ -113,17 +113,16 @@ BOOL WriteDsnToOdbcIni(const DsnInfo& info, const std::string& driverName) {
     return FALSE;
   }
 
-  SQLRemoveDSNFromIni(info.dsnName.c_str());
-
   if (!SQLWriteDSNToIni(info.dsnName.c_str(), driverName.c_str())) {
     logMessage(nullptr, "WriteDsnToOdbcIni: SQLWriteDSNToIni failed", LOG_LEVEL_ERROR);
     return FALSE;
   }
 
   const char* dsn = info.dsnName.c_str();
+  bool success = true;
   auto w = [&](const char* key, const std::string& val) {
-    if (!val.empty())
-      SQLWritePrivateProfileString(dsn, key, val.c_str(), "ODBC.INI");
+    if (!SQLWritePrivateProfileString(dsn, key, val.c_str(), "ODBC.INI"))
+      success = false;
   };
 
   w("Description", info.description);
@@ -140,6 +139,12 @@ BOOL WriteDsnToOdbcIni(const DsnInfo& info, const std::string& driverName) {
   w("SSLCA", info.sslca);
   w("SSLCERT", info.sslcert);
   w("SSLKEY", info.sslkey);
+
+  if (!success) {
+    logMessage(nullptr, "WriteDsnToOdbcIni: Failed to write one or more DSN attributes",
+               LOG_LEVEL_ERROR);
+    return FALSE;
+  }
 
   std::ostringstream oss;
   oss << "WriteDsnToOdbcIni: Written DSN '" << info.dsnName << "' with SERVER=" << info.server
@@ -286,12 +291,6 @@ static INT_PTR CALLBACK DSNDialogProc(HWND hDlg, UINT message, WPARAM wParam, LP
           << ", TableModel=" << (isTable ? "true" : "false");
       logMessage(nullptr, oss.str(), LOG_LEVEL_INFO);
 
-      int rpcPort = 6667;
-      try {
-        rpcPort = std::stoi(tmp.port);
-      } catch (...) {
-      }
-
       if (isTable && tmp.database.empty()) {
         MessageBoxA(hDlg, "Table Model requires a database name.", "Test Connection",
                     MB_OK | MB_ICONWARNING);
@@ -388,7 +387,7 @@ BOOL ShowDSNDialog(HWND hwndParent, WORD fRequest, LPCSTR lpszDriver, LPCSTR lps
     ctx.info.pwd = "root";
     ctx.info.database = "";
     ctx.info.isTableModel = "1";
-    ctx.info.logLevel = "4";
+    ctx.info.logLevel = "0";
     ctx.info.sessionTimeoutMs = "0";
     ctx.info.batchSize = "1000";
 

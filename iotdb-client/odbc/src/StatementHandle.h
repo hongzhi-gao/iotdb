@@ -26,6 +26,7 @@
 #include "Pch.h"
 #include "ODBCHandle.h"
 #include "ConnectionHandle.h"
+#include "DescriptorHandle.h"
 #include "ODBCResultSet.h"
 #include "ODBCSessionResultSet.h"
 #include "ODBCRestResultSet.h"
@@ -36,13 +37,28 @@
 // Forward declarations to avoid circular dependencies
 struct BindColInfo;
 
+struct ParameterBinding {
+  SQLSMALLINT inputOutputType = SQL_PARAM_INPUT;
+  SQLSMALLINT valueType = SQL_C_DEFAULT;
+  SQLSMALLINT parameterType = SQL_UNKNOWN_TYPE;
+  SQLULEN columnSize = 0;
+  SQLSMALLINT decimalDigits = 0;
+  SQLPOINTER valuePtr = nullptr;
+  SQLLEN bufferLength = 0;
+  SQLLEN* indicatorPtr = nullptr;
+  SQLLEN* octetLengthPtr = nullptr;
+  std::vector<std::string> streamedData;
+  std::vector<bool> streamedNull;
+  bool bound = false;
+};
+
 class StatementHandle : public ODBCHandle {
 public:
   StatementHandle(ConnectionHandle* connection)
       : ODBCHandle(SQL_HANDLE_STMT), appRowDesc(nullptr), impRowDesc(nullptr),
         appParamDesc(nullptr),
         impParamDesc(nullptr), // Added: Application and implementation parameter descriptors
-        curRow(-1), isStream(false), streamCurRow(0), connectionHandle(connection),
+        curRow(-1), isStream(false), isQuery(false), streamCurRow(0), connectionHandle(connection),
         resultSetPtr(nullptr),
         // Added: Cursor-related properties
         cursorType(SQL_CURSOR_FORWARD_ONLY), // Default to forward-only cursor
@@ -51,27 +67,50 @@ public:
         sensitivity(SQL_UNSPECIFIED),        // Default to unspecified sensitivity
         useBookmarks(SQL_UB_OFF),            // Default to not using bookmarks
         // Added: Pointer-related properties
-        bookmarkPtr(nullptr),        // Bookmark pointer
-        rowsFetchedPtr(nullptr),     // Already exists, but kept for reference
-        rowBindOffsetPtr(nullptr),   // Row bind offset pointer
-        paramsProcessedPtr(nullptr), // Processed parameters pointer
-        paramStatusPtr(nullptr),     // Parameter status pointer
+        bookmarkPtr(nullptr),                             // Bookmark pointer
+        rowsFetchedPtr(nullptr),                          // Already exists, but kept for reference
+        rowStatusPtr(nullptr), rowBindOffsetPtr(nullptr), // Row bind offset pointer
+        paramsProcessedPtr(nullptr),                      // Processed parameters pointer
+        paramStatusPtr(nullptr),                          // Parameter status pointer
         // Added: Size and quantity related properties
         rowArraySize(1), // Default row array size is 1
         paramSetSize(1), // Default parameter set size is 1
         maxRows(0),      // Default no maximum row limit
         maxLength(0),    // Default no maximum length limit
+        rowBindType(SQL_BIND_BY_COLUMN), paramBindType(SQL_BIND_BY_COLUMN),
         // Added: Other boolean/flag properties
-        noScan(SQL_NOSCAN_OFF),  // Default to enable scanning
-        retrieveData(SQL_RD_ON), // Default to retrieve data
-        metadataId(SQL_FALSE),   // Default metadata ID mode off
-        enableAutoIPD(SQL_TRUE), // Default to enable auto IPD
+        noScan(SQL_NOSCAN_OFF),   // Default to enable scanning
+        retrieveData(SQL_RD_ON),  // Default to retrieve data
+        metadataId(SQL_FALSE),    // Default metadata ID mode off
+        enableAutoIPD(SQL_FALSE), // Parameter descriptors are not populated automatically
         // Added: SQL Server specific properties
         paramFocus(0), // Default parameter focus is 0
-        lastGetDataRow(-1), lastGetDataCol(0) {}
+        prepared(false), rowsReturned(0), lastGetDataRow(-1), lastGetDataCol(0) {
+    implicitAppRowDesc = new DescriptorHandle(connection, DescriptorRole::APPLICATION_ROW, this);
+    implicitImpRowDesc = new DescriptorHandle(connection, DescriptorRole::IMPLEMENTATION_ROW, this);
+    implicitAppParamDesc =
+        new DescriptorHandle(connection, DescriptorRole::APPLICATION_PARAM, this);
+    implicitImpParamDesc =
+        new DescriptorHandle(connection, DescriptorRole::IMPLEMENTATION_PARAM, this);
+    appRowDesc = implicitAppRowDesc;
+    impRowDesc = implicitImpRowDesc;
+    appParamDesc = implicitAppParamDesc;
+    impParamDesc = implicitImpParamDesc;
+    cursorName = "SQL_CUR" + std::to_string(reinterpret_cast<uintptr_t>(this));
+    if (connection)
+      connection->statements.push_back(this);
+  }
 
   ~StatementHandle() {
+    if (connectionHandle) {
+      auto& statements = connectionHandle->statements;
+      statements.erase(std::remove(statements.begin(), statements.end(), this), statements.end());
+    }
     ClearResultSet();
+    delete implicitAppRowDesc;
+    delete implicitImpRowDesc;
+    delete implicitAppParamDesc;
+    delete implicitImpParamDesc;
   }
 
   ConnectionHandle* getConnection() const {
@@ -83,10 +122,24 @@ public:
   void ClearResultSet();
 
   std::string statementText;
+  std::string cursorName;
+  bool prepared;
+  SQLULEN rowsReturned;
+  std::vector<BindColInfo> columnBindings;
+  std::vector<ParameterBinding> parameterBindings;
+  bool needsParameterData = false;
+  SQLULEN nextDataSet = 0;
+  SQLULEN activeDataSet = std::numeric_limits<SQLULEN>::max();
+  size_t nextDataParameter = 0;
+  size_t activeDataParameter = std::numeric_limits<size_t>::max();
   SQLHANDLE appRowDesc;   // Application row descriptor (already exists)
   SQLHANDLE impRowDesc;   // Implementation row descriptor (already exists)
   SQLHANDLE appParamDesc; // Added: Application parameter descriptor
   SQLHANDLE impParamDesc; // Added: Implementation parameter descriptor
+  DescriptorHandle* implicitAppRowDesc;
+  DescriptorHandle* implicitImpRowDesc;
+  DescriptorHandle* implicitAppParamDesc;
+  DescriptorHandle* implicitImpParamDesc;
 
   std::shared_ptr<ODBCResultSet> resultSetPtr;
   int curRow;
@@ -103,10 +156,13 @@ public:
   SQLINTEGER useBookmarks; // Bookmark usage (SQL_UB_OFF/SQL_UB_VARIABLE, etc.)
 
   // Added: Pointer-related properties
-  SQLULEN* bookmarkPtr;         // Bookmark pointer
+  SQLULEN* bookmarkPtr; // Bookmark pointer
+  SQLULEN* rowsFetchedPtr;
+  SQLUSMALLINT* rowStatusPtr;   // Status for the single supported row in a rowset
   SQLULEN* rowBindOffsetPtr;    // Row bind offset pointer
   SQLULEN* paramsProcessedPtr;  // Processed parameters pointer
   SQLUSMALLINT* paramStatusPtr; // Parameter status pointer
+  SQLULEN* paramBindOffsetPtr = nullptr;
 
   // Added: Size and quantity related properties
   SQLULEN rowArraySize; // Row array size
@@ -114,6 +170,7 @@ public:
   SQLULEN maxRows;      // Maximum number of rows to return
   SQLULEN maxLength;    // Maximum data length
   SQLULEN rowBindType;  // Column binding or row binding method
+  SQLULEN paramBindType;
 
   // Added: Other boolean/flag properties
   SQLINTEGER noScan;        // Scan option (SQL_NOSCAN/SQL_UNNAMED)
@@ -128,9 +185,6 @@ public:
   std::vector<SQLLEN> getDataOffsets;
   int lastGetDataRow;
   SQLUSMALLINT lastGetDataCol;
-
-  // IRD
-  SQLULEN* rowsFetchedPtr; // Already exists
 
 private:
   ConnectionHandle* connectionHandle;

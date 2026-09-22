@@ -26,6 +26,34 @@
 #include "Log.h"
 #include "driver.h"
 #include "DiagnosticManager.h"
+#include "StatementUtils.h"
+
+namespace {
+class CurlGlobalState {
+public:
+  CurlGlobalState() : result(curl_global_init(CURL_GLOBAL_ALL)) {}
+  ~CurlGlobalState() {
+    if (result == CURLE_OK)
+      curl_global_cleanup();
+  }
+
+  CURLcode result;
+};
+
+struct CurlEasyDeleter {
+  void operator()(CURL* handle) const {
+    if (handle)
+      curl_easy_cleanup(handle);
+  }
+};
+
+struct CurlHeadersDeleter {
+  void operator()(curl_slist* headers) const {
+    if (headers)
+      curl_slist_free_all(headers);
+  }
+};
+} // namespace
 
 // Callback function for writing received data
 size_t WriteCallback(void* contents, const size_t size, const size_t nmemb, std::string* response) {
@@ -35,112 +63,79 @@ size_t WriteCallback(void* contents, const size_t size, const size_t nmemb, std:
 }
 
 SQLRETURN executeRestCall(ConnectionHandle* cnct, const std::string& relativeUrl,
-                          const nlohmann::json jsonPayload, nlohmann::json* jsonResponse) {
+                          const nlohmann::json& jsonPayload, nlohmann::json* jsonResponse) {
   logMessage(cnct, "  Entering executeRestCall", LOG_LEVEL_TRACE);
 
-  SQLRETURN returnCode = SQL_SUCCESS;
-  curl_global_init(CURL_GLOBAL_ALL);
-  CURL* curl = curl_easy_init();
-  if (curl) {
-    try {
-      std::string fullUrl = "http://" + cnct->serverHostName + ":" + cnct->serverPort + relativeUrl;
-      logMessage(cnct, "Connecting to: " + fullUrl, LOG_LEVEL_DEBUG);
-      curl_easy_setopt(curl, CURLOPT_URL, fullUrl.c_str());
+  static CurlGlobalState curlGlobal;
+  if (curlGlobal.result != CURLE_OK) {
+    logMessage(cnct, "Curl global initialization failed", LOG_LEVEL_ERROR);
+    cnct->addDiagnostic("HY000", "Couldn't initialize the REST client");
+    return SQL_ERROR;
+  }
 
-      // Provide the auth information
-      curl_easy_setopt(curl, CURLOPT_HTTPAUTH, static_cast<long>(CURLAUTH_BASIC));
-      curl_easy_setopt(curl, CURLOPT_USERNAME, cnct->userName.c_str());
-      curl_easy_setopt(curl, CURLOPT_PASSWORD, cnct->password.c_str());
-
-      // Set the headers
-      curl_slist* headers = nullptr;
-      headers = curl_slist_append(headers, "Content-Type: application/json");
-      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-
-      // Construct and set the JSON payload
-      std::string jsonString = jsonPayload.dump();
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDS, jsonString.c_str());
-
-      // Capture the response
-      std::string response;
-      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-      curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-
-      // Execute the request
-      const CURLcode res = curl_easy_perform(curl);
-
-      logMessage(cnct, "Response: " + response, LOG_LEVEL_TRACE);
-
-      // Handle the response
-      if (res != CURLE_OK) {
-        logMessage(cnct, curl_easy_strerror(res), LOG_LEVEL_ERROR);
-        cnct->addDiagnostic("08001", "The specified server URL could not be reached.");
-        returnCode = SQL_ERROR;
-      } else {
-        // Get the http response code
-        long httpCode = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
-        logMessage(cnct, "Http response code: " + std::to_string(httpCode), LOG_LEVEL_DEBUG);
-
-        // If we got anything different from a http-Ok from the server, we have to treat this as an error.
-        if (httpCode != 200) {
-          logMessage(cnct, "Got an invalid response code from the server", LOG_LEVEL_ERROR);
-          cnct->addDiagnostic("08001", "Invalid response");
-          returnCode = SQL_ERROR;
-        } else {
-          // Parse the JSON response only if the HTTP response is OK
-          try {
-            *jsonResponse = nlohmann::json::parse(response);
-            logMessage(cnct, "Parsed JSON: " + jsonResponse->dump(4), LOG_LEVEL_TRACE);
-          } catch (const nlohmann::json::parse_error& e) {
-            logMessage(cnct, "Failed to parse JSON response: " + std::string(e.what()),
-                       LOG_LEVEL_ERROR);
-            cnct->addDiagnostic("22018", "Failed to parse JSON response: " + std::string(e.what()));
-            returnCode = SQL_ERROR;
-          }
-        }
-      }
-
-      // Clean up
-      curl_slist_free_all(headers);
-      curl_easy_cleanup(curl);
-    } catch (const std::exception& e) {
-      logMessage(cnct, "Unexpected error: " + std::string(e.what()), LOG_LEVEL_ERROR);
-      cnct->addDiagnostic("HY000", "Unexpected error: " + std::string(e.what()));
-      returnCode = SQL_ERROR;
-    }
-  } else {
+  std::unique_ptr<CURL, CurlEasyDeleter> curl(curl_easy_init());
+  if (!curl) {
     logMessage(cnct, "Curl initialization failed", LOG_LEVEL_ERROR);
     cnct->addDiagnostic("HY000", "Couldn't initialize the REST client");
-    returnCode = SQL_ERROR;
+    return SQL_ERROR;
   }
 
-  curl_global_cleanup();
+  try {
+    const std::string fullUrl =
+        "http://" + cnct->serverHostName + ":" + cnct->serverPort + relativeUrl;
+    logMessage(cnct, "Connecting to: " + fullUrl, LOG_LEVEL_DEBUG);
+    curl_easy_setopt(curl.get(), CURLOPT_URL, fullUrl.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPAUTH, static_cast<long>(CURLAUTH_BASIC));
+    curl_easy_setopt(curl.get(), CURLOPT_USERNAME, cnct->userName.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_PASSWORD, cnct->password.c_str());
+
+    std::unique_ptr<curl_slist, CurlHeadersDeleter> headers(
+        curl_slist_append(nullptr, "Content-Type: application/json"));
+    if (!headers) {
+      cnct->addDiagnostic("HY001", "Couldn't allocate REST request headers");
+      return SQL_ERROR;
+    }
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers.get());
+
+    const std::string jsonString = jsonPayload.dump();
+    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, jsonString.c_str());
+
+    std::string response;
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
+
+    const CURLcode result = curl_easy_perform(curl.get());
+    if (result != CURLE_OK) {
+      logMessage(cnct, curl_easy_strerror(result), LOG_LEVEL_ERROR);
+      cnct->addDiagnostic("08001", "The specified server URL could not be reached.");
+      return SQL_ERROR;
+    }
+
+    long httpCode = 0;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &httpCode);
+    logMessage(cnct, "Http response code: " + std::to_string(httpCode), LOG_LEVEL_DEBUG);
+    if (httpCode != 200) {
+      logMessage(cnct, "Got an invalid response code from the server", LOG_LEVEL_ERROR);
+      cnct->addDiagnostic("08001", "Invalid response");
+      return SQL_ERROR;
+    }
+
+    try {
+      *jsonResponse = nlohmann::json::parse(response);
+    } catch (const nlohmann::json::parse_error& e) {
+      logMessage(cnct, "Failed to parse JSON response: " + std::string(e.what()), LOG_LEVEL_ERROR);
+      cnct->addDiagnostic("22018", "Failed to parse JSON response: " + std::string(e.what()));
+      return SQL_ERROR;
+    }
+  } catch (const std::exception& e) {
+    logMessage(cnct, "Unexpected error: " + std::string(e.what()), LOG_LEVEL_ERROR);
+    cnct->addDiagnostic("HY000", "Unexpected error: " + std::string(e.what()));
+    return SQL_ERROR;
+  }
 
   logMessage(cnct, "Exiting executeRestCall", LOG_LEVEL_TRACE);
-  return returnCode;
-}
-
-// Determine if SQL statement is a query statement
-bool IsQueryStatement(const std::string& sql) {
-  size_t start = sql.find_first_not_of(" \t\n\r");
-  std::string trimmedSql = (start == std::string::npos) ? "" : sql.substr(start);
-
-  std::transform(trimmedSql.begin(), trimmedSql.end(), trimmedSql.begin(), ::tolower);
-
-  if (trimmedSql.find("select") == 0) {
-    return true;
-  } else if (trimmedSql.find("with") == 0) {
-    return true;
-  } else if (trimmedSql.find("show") == 0) {
-    return true;
-  } else if (trimmedSql.find("describe") == 0 || trimmedSql.find("desc") == 0) {
-    return true;
-  } else if (trimmedSql.find("list") == 0) {
-    return true;
-  } else {
-    return false;
-  }
+  return SQL_SUCCESS;
 }
 
 // Execute a simple query or modification statement directly through connection handle and return json data, no statement handle involved.
@@ -164,7 +159,6 @@ SQLRETURN executeQuery(ConnectionHandle* cnct, std::string statementText,
   } else {
     jsonPayload = {{"sql", statementText}};
   }
-  logMessage(cnct, "Request payload: " + jsonPayload.dump(), LOG_LEVEL_DEBUG);
   const std::string relativeUrl = std::string(cnct->isTableModel ? "/rest/table/v1" : "/rest/v2") +
                                   std::string(isQuery ? "/query" : "/nonQuery");
   logMessage(cnct, "Target URL: " + relativeUrl, LOG_LEVEL_DEBUG);
@@ -277,14 +271,10 @@ SQLRETURN IoTDB_ExecDirect_Rest(StatementHandle* stmt, const std::string& statem
   ConnectionHandle* cnct = stmt->getConnection();
   logMessage(cnct, "IoTDB_ExecDirect_Rest: Entering", LOG_LEVEL_TRACE);
 
-  // TODO: Do something with the parameter ...
   bool isQuery = IsQueryStatement(statementText);
-  // Log statement details at DEBUG level
+  // Do not log SQL text: statements can contain credentials or user data.
   if (isLogLevelEnabled(cnct, LOG_LEVEL_DEBUG)) {
-    std::string logMessageText = "IoTDB_ExecDirect_Rest: Statement = " + statementText;
-    logMessage(cnct, logMessageText, LOG_LEVEL_DEBUG);
-
-    logMessageText =
+    const std::string logMessageText =
         "IoTDB_ExecDirect_Rest: Statement type = " + std::string(isQuery ? "query" : "nonQuery");
     logMessage(cnct, logMessageText, LOG_LEVEL_DEBUG);
   }

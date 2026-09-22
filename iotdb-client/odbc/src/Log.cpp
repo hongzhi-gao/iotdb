@@ -33,6 +33,7 @@
 
 static std::ofstream logFile;
 static std::once_flag logFileOnce;
+static std::mutex logMutex;
 
 static void EnsureLogFileOpen() {
 #ifdef WIN32
@@ -72,7 +73,12 @@ static void EnsureLogFileOpen() {
 }
 
 void logMessageInternal(const std::string& message) {
+#if !ODBC_ENABLE_LOGGING
+  (void)message;
+  return;
+#else
   std::call_once(logFileOnce, EnsureLogFileOpen);
+  std::lock_guard<std::mutex> lock(logMutex);
   if (!logFile) {
     return;
   }
@@ -92,13 +98,16 @@ void logMessageInternal(const std::string& message) {
 #else
   // Linux & macOS implementation
   char buffer[64];
-  if (std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", std::localtime(&now))) {
+  std::tm localTime{};
+  if (localtime_r(&now, &localTime) &&
+      std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &localTime)) {
     logFile << buffer << ": " << message << std::endl;
   }
 #endif
   else {
     logFile << "Error retrieving time: " << message << std::endl;
   }
+#endif
 }
 
 /*
@@ -111,7 +120,10 @@ Logging Levels:
 if cnct == nullptr, the log will output.
  */
 void logMessage(ConnectionHandle* cnct, const std::string& message, int level) {
-#ifndef DEBUG_LOG_ENABLED
+#if !ODBC_ENABLE_LOGGING
+  (void)cnct;
+  (void)message;
+  (void)level;
   return;
 #else
   if (!isLogLevelEnabled(cnct, level))
@@ -121,11 +133,16 @@ void logMessage(ConnectionHandle* cnct, const std::string& message, int level) {
 }
 
 void logMessage(const std::string& message) {
+#if ODBC_ENABLE_LOGGING
   logMessageInternal("(NO LOG LEVEL) " + message);
+#else
+  (void)message;
+#endif
 }
 
 void cleanupLogging() {
-#ifdef DEBUG_LOG_ENABLED
+#if ODBC_ENABLE_LOGGING
+  std::lock_guard<std::mutex> lock(logMutex);
   if (logFile.is_open()) {
     logFile.close();
   }
@@ -133,7 +150,9 @@ void cleanupLogging() {
 }
 
 bool isLogLevelEnabled(ConnectionHandle* cnct, int level) {
-#ifndef DEBUG_LOG_ENABLED
+#if !ODBC_ENABLE_LOGGING
+  (void)cnct;
+  (void)level;
   return false;
 #else
   if (cnct == nullptr)

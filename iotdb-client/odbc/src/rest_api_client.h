@@ -35,12 +35,7 @@ size_t WriteCallback(void* contents, const size_t size, const size_t nmemb, std:
 // @param jsonResponse output parameter for storing JSON response
 // @return SQLRETURN return code
 SQLRETURN executeRestCall(ConnectionHandle* cnct, const std::string& relativeUrl,
-                          const nlohmann::json jsonPayload, nlohmann::json* jsonResponse);
-
-// Determine if SQL statement is a query statement
-// @param sql SQL statement string
-// @return true if query statement, false otherwise
-inline bool IsQueryStatement(const std::string& sql);
+                          const nlohmann::json& jsonPayload, nlohmann::json* jsonResponse);
 
 // Execute a simple query or modification statement directly through connection handle and return json data, no statement handle involved
 // @param cnct connection handle

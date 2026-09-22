@@ -28,7 +28,7 @@
 
 ConnectionHandle::ConnectionHandle(EnvironmentHandle* environment)
     : ODBCHandle(SQL_HANDLE_DBC), serverHostName("127.0.0.1"), serverPort("6667"), userName("root"),
-      password("root"), autoCommit(false), timeoutLogin(0), timeoutConnection(0),
+      password("root"), autoCommit(true), timeoutLogin(0), timeoutConnection(0),
       environmentHandle(environment), database(""), logLevel(LOG_LEVEL_ERROR), isTableModel(true),
       useRestful(false), sessionTimeoutMs(LLONG_MAX), batchSize(1000), sessionPtr(nullptr),
       tableSessionPtr(nullptr) {}
@@ -65,6 +65,8 @@ void SetConnectionHandle(ConnectionHandle* cnct, std::string key, std::string va
           !enabled && value != "0" && value != "false" && value != "no" && value != "off";
       cnct->sslConfig.useSsl = enabled;
     } else {
+      cnct->invalidRestfulValue =
+          !enabled && value != "0" && value != "false" && value != "no" && value != "off";
       cnct->useRestful = enabled;
     }
   } else if (key == "sslca")
@@ -98,9 +100,13 @@ void SetConnectionHandle(ConnectionHandle* cnct, std::string key, std::string va
     logStream << "Set loglevel:" << value;
     logMessage(logStream.str());
     try {
-      cnct->logLevel = std::stoi(value);
-    } catch (...) {
-      cnct->logLevel = LOG_LEVEL_ERROR; // Default to ERROR if conversion fails
+      size_t consumed = 0;
+      const int parsed = std::stoi(value, &consumed);
+      if (consumed != value.size() || parsed < LOG_LEVEL_ERROR || parsed > LOG_LEVEL_TRACE)
+        throw std::invalid_argument("LOGLEVEL must be between 0 and 4");
+      cnct->logLevel = parsed;
+    } catch (const std::exception&) {
+      throw std::invalid_argument("LOGLEVEL must be between 0 and 4");
     }
   } else if (key == "istablemodel" || key == "tablemodel") {
     std::transform(value.begin(), value.end(), value.begin(),
@@ -119,17 +125,22 @@ void SetConnectionHandle(ConnectionHandle* cnct, std::string key, std::string va
   } else if (key == "sessiontimeoutms") {
     logStream << "Set sessionTimeoutMs:" << value;
     logMessage(cnct, logStream.str(), LOG_LEVEL_INFO);
-    cnct->sessionTimeoutMs = std::stoll(value);
-    if (cnct->sessionTimeoutMs == 0) {
+    size_t consumed = 0;
+    cnct->sessionTimeoutMs = std::stoll(value, &consumed);
+    if (consumed != value.size() || cnct->sessionTimeoutMs < 0)
+      throw std::invalid_argument("SESSIONTIMEOUTMS must be a non-negative integer");
+    if (cnct->sessionTimeoutMs == 0)
       cnct->sessionTimeoutMs = LLONG_MAX;
-    }
   } else if (key == "batchsize") {
     logStream << "Set batchSize:" << value;
     logMessage(cnct, logStream.str(), LOG_LEVEL_INFO);
-    cnct->batchSize = std::stoll(value);
-    if (cnct->batchSize == 0) {
+    size_t consumed = 0;
+    const long long parsed = std::stoll(value, &consumed);
+    if (consumed != value.size() || parsed < 0 || parsed > std::numeric_limits<SQLINTEGER>::max())
+      throw std::invalid_argument("BATCHSIZE is out of range");
+    cnct->batchSize = static_cast<SQLINTEGER>(parsed);
+    if (cnct->batchSize == 0)
       cnct->batchSize = 1000;
-    }
   } else {
     logStream << "Currently unsupported connection parameter: key=" << key;
     logMessage(cnct, logStream.str(), LOG_LEVEL_WARN);
@@ -144,6 +155,7 @@ bool ConnectionHandle::LoadDsnFromOdbcIni(const std::string& dsnName) {
     logMessage(this, "LoadDsnFromOdbcIni: DSN name is empty", LOG_LEVEL_WARN);
     return false;
   }
+  dataSourceName = dsnName;
 
   auto readKey = [&](const char* key, const char* defaultVal) -> std::string {
     char buf[1024] = {};
@@ -221,6 +233,17 @@ bool ConnectionHandle::LoadDsnFromOdbcIni(const std::string& dsnName) {
 void ConnectionHandle::ValidateTransport() const {
   if (invalidSslValue)
     throw std::invalid_argument("SSL must be a boolean value");
+  if (invalidRestfulValue)
+    throw std::invalid_argument("RESTFUL must be a boolean value");
+  size_t consumed = 0;
+  long port = 0;
+  try {
+    port = std::stol(serverPort, &consumed);
+  } catch (const std::exception&) {
+    throw std::invalid_argument("PORT must be an integer between 1 and 65535");
+  }
+  if (consumed != serverPort.size() || port < 1 || port > 65535)
+    throw std::invalid_argument("PORT must be an integer between 1 and 65535");
   bool hasCert = !sslConfig.clientCertificateFilePath.empty();
   bool hasKey = !sslConfig.clientPrivateKeyFilePath.empty();
   bool hasTlsOptions =
@@ -237,8 +260,6 @@ void ConnectionHandle::ValidateTransport() const {
 void ConnectionHandle::OpenSession() {
   ValidateTransport();
   int port = std::stoi(serverPort);
-  if (port < 1 || port > 65535)
-    throw std::invalid_argument("PORT is out of range");
   if (isTableModel) {
     if (!tableSessionPtr) {
       TableSessionBuilder builder;

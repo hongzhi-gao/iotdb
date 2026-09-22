@@ -77,6 +77,8 @@ SQLSMALLINT ODBCResultSet::getDefaultCTypeForColumn(SQLUSMALLINT columnNumber) c
     return SQL_C_CHAR;
   }
   std::string columnType = getColumnType(columnNumber - 1);
+  if (columnType == "INT16")
+    return SQL_C_SSHORT;
   auto it = columnTypeToTSDataTypeMap.find(columnType);
   if (it == columnTypeToTSDataTypeMap.end()) {
     return SQL_C_CHAR;
@@ -125,9 +127,6 @@ const ODBCField& ODBCResultSet::getValue(size_t rowIndex, size_t columnIndex) co
     return kNullField;
   }
 
-  logMessage(stmt->getConnection(),
-             "ODBCResultSet::getValue: Value is " + data[rowIndex][columnIndex].toString(),
-             LOG_LEVEL_TRACE);
   return data[rowIndex][columnIndex];
 }
 
@@ -237,41 +236,12 @@ void ODBCResultSet::clear() {
 }
 
 void ODBCResultSet::outputTable(int maxRows) const {
+  (void)maxRows;
+  // Result values may contain credentials or application data. Log only shape.
   logMessage(stmt->getConnection(),
-             "ODBCResultSet::outputTable: Start\n -------------- Starting --------------",
-             LOG_LEVEL_TRACE);
-  // Output column headers
-  std::stringstream headerStream;
-  for (const auto& colName : columnNames) {
-    headerStream << colName << "\t";
-  }
-  logMessage(stmt->getConnection(), "|" + headerStream.str() + "|", LOG_LEVEL_INFO);
-  std::stringstream typeStream;
-  for (const auto& colType : columnTypes) {
-    typeStream << "(" << colType << ")\t";
-  }
-  logMessage(stmt->getConnection(), "|" + typeStream.str() + "|", LOG_LEVEL_INFO);
-  logMessage(stmt->getConnection(), "-----------------------------------------", LOG_LEVEL_TRACE);
-  // Output data rows
-  int rowsToOutput = std::min(maxRows, numRows);
-  for (int i = 0; i < rowsToOutput; ++i) {
-    std::stringstream rowStream;
-    for (const auto& cell : data[i]) {
-      rowStream << cell.toString() << "\t";
-    }
-    logMessage(stmt->getConnection(), "|" + rowStream.str() + "|", LOG_LEVEL_INFO);
-  }
-
-  if (numRows > maxRows) {
-    logMessage(stmt->getConnection(),
-               "ODBCResultSet::outputTable: ... (only showing first " + std::to_string(maxRows) +
-                   " of " + std::to_string(numRows) + " rows)",
-               LOG_LEVEL_INFO);
-  }
-
-  logMessage(stmt->getConnection(),
-             "-------------- Exiting --------------\nODBCResultSet::outputTable: End",
-             LOG_LEVEL_TRACE);
+             "ODBCResultSet: " + std::to_string(numRows) + " rows, " + std::to_string(numColumns) +
+                 " columns",
+             LOG_LEVEL_DEBUG);
 }
 
 // Check if data type conversion is valid for a column
@@ -316,7 +286,7 @@ SQLRETURN ODBCResultSet::bindColumn(SQLUSMALLINT columnNumber, SQLSMALLINT targe
     // Bookmark column not supported
     logMessage(cnct, "ODBCResultSet::bindColumn: Bookmark column (0) not supported",
                LOG_LEVEL_WARN);
-    stmt->addDiagnostic("HY000", "Bookmarks not supported");
+    stmt->addDiagnostic("HYC00", "Bookmarks are not supported");
     return SQL_ERROR;
   }
 
@@ -335,6 +305,12 @@ SQLRETURN ODBCResultSet::bindColumn(SQLUSMALLINT columnNumber, SQLSMALLINT targe
                LOG_LEVEL_ERROR);
     stmt->addDiagnostic("07009", "Invalid descriptor index");
     return SQL_ERROR;
+  }
+
+  if (!targetValuePtr && !strLen_or_IndPtr) {
+    if (bindColInfo.size() > columnNumber)
+      bindColInfo[columnNumber] = BindColInfo();
+    return SQL_SUCCESS;
   }
 
   SQLSMALLINT actualType =
@@ -363,7 +339,7 @@ SQLRETURN ODBCResultSet::bindColumn(SQLUSMALLINT columnNumber, SQLSMALLINT targe
   binding->strLen_or_IndPtr = strLen_or_IndPtr;
   binding->isBound = true;
 
-  if (actualType == SQL_C_CHAR && bufferLength > 0) {
+  if (targetValuePtr && actualType == SQL_C_CHAR && bufferLength > 0) {
     // Initialize to an empty string
     static_cast<char*>(targetValuePtr)[0] = '\0';
     if (strLen_or_IndPtr) {

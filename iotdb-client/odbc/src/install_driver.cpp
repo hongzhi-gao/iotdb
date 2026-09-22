@@ -28,7 +28,6 @@
 
 static const char* DRIVER_NAME = "Apache IoTDB ODBC Driver";
 static const char* DRIVER_DESCRIPTION = "Apache IoTDB ODBC Driver";
-static const char* DLL_FILENAME = "apache_iotdb_odbc.dll";
 
 static void PrintInstallerError() {
   DWORD errCode = 0;
@@ -39,6 +38,14 @@ static void PrintInstallerError() {
 
 static int InstallDriver(const char* dllPath) {
   DWORD usageCount = 0;
+
+#ifdef _WIN32
+  const DWORD attributes = GetFileAttributesA(dllPath);
+  if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+    fprintf(stderr, "Driver DLL does not exist: %s\n", dllPath);
+    return 1;
+  }
+#endif
 
   printf("Removing previous registration of '%s' (if any)...\n", DRIVER_NAME);
   SQLRemoveDriver(DRIVER_NAME, FALSE, &usageCount);
@@ -55,53 +62,28 @@ static int InstallDriver(const char* dllPath) {
   else
     driverDir = ".";
 
-  char driverDescr[2048] = {};
-  int pos = 0;
-
-  auto append = [&](const char* s) {
-    int len = (int)strlen(s);
-    memcpy(driverDescr + pos, s, len);
-    pos += len;
+  std::string driverDescr;
+  auto appendEntry = [&](const std::string& entry) {
+    driverDescr.append(entry);
+    driverDescr.push_back('\0');
   };
-
-  append(DRIVER_NAME);
-  driverDescr[pos++] = '\0';
-
-  append("Driver=");
-  append(dllPath);
-  driverDescr[pos++] = '\0';
-
-  append("Setup=");
-  append(dllPath);
-  driverDescr[pos++] = '\0';
-
-  append("Description=");
-  append(DRIVER_DESCRIPTION);
-  driverDescr[pos++] = '\0';
-
-  append("DriverODBCVer=03.80");
-  driverDescr[pos++] = '\0';
-
-  append("ConnectFunctions=YYN");
-  driverDescr[pos++] = '\0';
-
-  append("APILevel=1");
-  driverDescr[pos++] = '\0';
-
-  append("SQLLevel=1");
-  driverDescr[pos++] = '\0';
-
-  append("FileUsage=0");
-  driverDescr[pos++] = '\0';
-
-  driverDescr[pos++] = '\0';
+  appendEntry(DRIVER_NAME);
+  appendEntry("Driver=" + fullPath);
+  appendEntry("Setup=" + fullPath);
+  appendEntry(std::string("Description=") + DRIVER_DESCRIPTION);
+  appendEntry("DriverODBCVer=03.80");
+  appendEntry("ConnectFunctions=YYN");
+  appendEntry("APILevel=1");
+  appendEntry("SQLLevel=1");
+  appendEntry("FileUsage=0");
+  driverDescr.push_back('\0');
 
   char outPath[512] = {};
   printf("Installing driver '%s'\n", DRIVER_NAME);
   printf("  DLL: %s\n", dllPath);
   printf("  Dir: %s\n", driverDir.c_str());
 
-  if (!SQLInstallDriverEx(driverDescr, driverDir.c_str(), outPath, sizeof(outPath), nullptr,
+  if (!SQLInstallDriverEx(driverDescr.c_str(), driverDir.c_str(), outPath, sizeof(outPath), nullptr,
                           ODBC_INSTALL_COMPLETE, nullptr)) {
     fprintf(stderr, "Failed to install driver.\n");
     PrintInstallerError();

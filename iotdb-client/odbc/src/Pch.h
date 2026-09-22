@@ -47,6 +47,7 @@
 #include <Optional.h>
 #include <Date.h>
 #include <climits>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <ctime>
@@ -57,6 +58,7 @@
 
 // Standard library includes
 #include <iostream>
+#include <iterator>
 #include <vector>
 #include <string>
 #include <memory>

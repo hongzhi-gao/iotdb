@@ -29,9 +29,6 @@ class StatementHandle;
 class TableSession;
 class SessionDataSet;
 
-// Determine if SQL statement is a query statement
-inline bool IsQueryStatement(const std::string& sql);
-
 // Test Session API connection and return connection result
 SQLRETURN IoTDB_DriverConnect_Session(ConnectionHandle* cnct);
 
