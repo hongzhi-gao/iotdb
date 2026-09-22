@@ -2627,7 +2627,9 @@ static SQLSMALLINT DefaultParameterCType(SQLSMALLINT sqlType) {
   case SQL_BIT:
     return SQL_C_BIT;
   case SQL_TINYINT:
+    return SQL_C_STINYINT;
   case SQL_SMALLINT:
+    return SQL_C_SSHORT;
   case SQL_INTEGER:
     return SQL_C_SLONG;
   case SQL_BIGINT:
@@ -2636,9 +2638,14 @@ static SQLSMALLINT DefaultParameterCType(SQLSMALLINT sqlType) {
     return SQL_C_FLOAT;
   case SQL_FLOAT:
   case SQL_DOUBLE:
+    return SQL_C_DOUBLE;
   case SQL_DECIMAL:
   case SQL_NUMERIC:
-    return SQL_C_DOUBLE;
+    return SQL_C_CHAR;
+  case SQL_WCHAR:
+  case SQL_WVARCHAR:
+  case SQL_WLONGVARCHAR:
+    return SQL_C_WCHAR;
   case SQL_TYPE_DATE:
   case SQL_DATE:
     return SQL_C_TYPE_DATE;

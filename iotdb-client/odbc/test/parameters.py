@@ -147,6 +147,18 @@ def main():
             ), requests[-1]
 
         check(c.c_double(1.2345678901234567), 8, 8, "1.2345678901234567")
+
+        # Tail bytes make an incorrect wider read deterministic.
+        class SmallBuffer(c.Structure):
+            _fields_ = [("value", c.c_short), ("tail", c.c_short)]
+
+        class TinyBuffer(c.Structure):
+            _fields_ = [("value", c.c_byte), ("tail", c.c_byte * 3)]
+
+        check(SmallBuffer(42, 1234), 99, 5, "42")
+        check(TinyBuffer(42, (c.c_byte * 3)(1, 2, 3)), 99, -6, "42")
+        check(c.create_string_buffer(b"12.3456"), 99, 3, "'12.3456'")
+        check((c.c_ushort * 3)(0x4E2D, 0x6587, 0), 99, -9, "'中文'")
         check(
             Timestamp(2026, 9, 22, 1, 2, 3, 123456789),
             93,
