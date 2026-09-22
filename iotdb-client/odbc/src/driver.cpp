@@ -43,6 +43,8 @@
 #include "EnvironmentHandle.h"
 #include "CopyField.h"
 
+static void PopulateImplementationRowDescriptor(StatementHandle* stmt);
+
 /**
  * Copy std::string to ODBC string buffer
  * @param value input string
@@ -314,6 +316,10 @@ SQLRETURN SQL_API SQLBindParameter(SQLHSTMT statementHandle, SQLUSMALLINT parame
     return SQL_INVALID_HANDLE;
   auto* stmt = static_cast<StatementHandle*>(statementHandle);
   stmt->clearDiagnostics();
+  if (stmt->needsParameterData) {
+    stmt->addDiagnostic("HY010", "Function sequence error");
+    return SQL_ERROR;
+  }
   if (parameterNumber == 0 ||
       parameterNumber > static_cast<SQLUSMALLINT>(std::numeric_limits<SQLSMALLINT>::max())) {
     stmt->addDiagnostic("07009", "Invalid parameter number");
@@ -2006,6 +2012,8 @@ SQLRETURN SQL_API SQLCopyDesc(SQLHDESC sourceDescHandle, SQLHDESC targetDescHand
     target->addDiagnostic("HY024", "Descriptor handles belong to different connections");
     return SQL_ERROR;
   }
+  if (source->role == DescriptorRole::IMPLEMENTATION_ROW && source->owner)
+    PopulateImplementationRowDescriptor(source->owner);
   target->arraySize = source->arraySize;
   target->arrayStatusPtr = source->arrayStatusPtr;
   target->bindOffsetPtr = source->bindOffsetPtr;
@@ -2530,6 +2538,8 @@ static void PopulateImplementationRowDescriptor(StatementHandle* stmt) {
   }
 }
 
+static SQLRETURN ExecuteBoundStatement(StatementHandle* stmt);
+
 SQLRETURN SQL_API SQLExecDirect(SQLHSTMT statementHandle, SQLCHAR* statementText,
                                 SQLINTEGER textLength) {
   StatementHandle* stmt = static_cast<StatementHandle*>(statementHandle);
@@ -2558,6 +2568,10 @@ SQLRETURN SQL_API SQLExecDirect(SQLHSTMT statementHandle, SQLCHAR* statementText
     stmt->addDiagnostic("HY090", "Invalid string or buffer length");
     return SQL_ERROR;
   }
+  if (stmt->needsParameterData) {
+    stmt->addDiagnostic("HY010", "Function sequence error");
+    return SQL_ERROR;
+  }
   stmt->prepared = false;
   stmt->rowsReturned = 0;
   stmt->curRow = -1;
@@ -2568,9 +2582,8 @@ SQLRETURN SQL_API SQLExecDirect(SQLHSTMT statementHandle, SQLCHAR* statementText
   std::string sqlStatement = ConvertSQLCHARToString(statementText, textLength);
   logMessage(cnct, "SQLExecDirect: Executing statement", LOG_LEVEL_DEBUG);
 
-  const SQLRETURN returnCode = IoTDB_ExecDirect(stmt, sqlStatement);
-  if (SQL_SUCCEEDED(returnCode))
-    PopulateImplementationRowDescriptor(stmt);
+  stmt->statementText = sqlStatement;
+  const SQLRETURN returnCode = ExecuteBoundStatement(stmt);
   if (returnCode != SQL_SUCCESS) {
     logMessage(cnct, "SQLExecDirect: Execution failed with code: " + std::to_string(returnCode),
                LOG_LEVEL_ERROR);
@@ -2882,7 +2895,9 @@ static SQLRETURN ExecuteParameterSets(StatementHandle* stmt) {
   SQLRETURN result = SQL_SUCCESS;
   if (stmt->paramsProcessedPtr)
     *stmt->paramsProcessedPtr = 0;
-  for (SQLULEN set = 0; set < stmt->paramSetSize; ++set) {
+  const SQLULEN setCount =
+      ParameterMarkerPositions(stmt->statementText).empty() ? 1 : stmt->paramSetSize;
+  for (SQLULEN set = 0; set < setCount; ++set) {
     std::string sql;
     if (!RenderParameters(stmt, set, sql)) {
       result = SQL_ERROR;
@@ -2953,6 +2968,10 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT statementHandle) {
     stmt->addDiagnostic("HY010", "Statement has not been prepared");
     return SQL_ERROR;
   }
+  return ExecuteBoundStatement(stmt);
+}
+
+static SQLRETURN ExecuteBoundStatement(StatementHandle* stmt) {
   stmt->rowsReturned = 0;
   SyncParameterBindingsFromDescriptors(stmt);
   const std::vector<size_t> markers = ParameterMarkerPositions(stmt->statementText);
@@ -2965,6 +2984,8 @@ SQLRETURN SQL_API SQLExecute(SQLHSTMT statementHandle) {
       stmt->addDiagnostic("07002", "COUNT field incorrect: not all parameters are bound");
       return SQL_ERROR;
     }
+  }
+  for (size_t index = 0; index < markers.size(); ++index) {
     for (SQLULEN set = 0; set < stmt->paramSetSize; ++set) {
       if (IsDataAtExecution(ParameterIndicatorAt(stmt, stmt->parameterBindings[index], set))) {
         stmt->needsParameterData = true;
@@ -3643,6 +3664,9 @@ SQLRETURN SQL_API SQLGetDescField(SQLHDESC descriptorHandle, SQLSMALLINT recNumb
     return SQL_INVALID_HANDLE;
   descriptor->clearDiagnostics();
 
+  if (descriptor->role == DescriptorRole::IMPLEMENTATION_ROW && descriptor->owner)
+    PopulateImplementationRowDescriptor(descriptor->owner);
+
   auto setStringField = [&](const std::string& text) -> SQLRETURN {
     if (stringLength)
       *stringLength = static_cast<SQLINTEGER>(text.size());
@@ -3783,12 +3807,15 @@ SQLRETURN SQL_API SQLGetDescRec(SQLHDESC descriptorHandle, SQLSMALLINT recNumber
     descriptor->addDiagnostic("07009", "Invalid descriptor index");
     return SQL_ERROR;
   }
+  if (descriptor->role == DescriptorRole::IMPLEMENTATION_ROW && descriptor->owner)
+    PopulateImplementationRowDescriptor(descriptor->owner);
   const DescriptorRecord* record = descriptor->findRecord(recNumber);
   if (!record || recNumber > descriptor->count)
     return SQL_NO_DATA;
   SQLINTEGER nameLength32 = 0;
   SQLRETURN result = SQLGetDescField(descriptorHandle, recNumber, SQL_DESC_NAME, name, bufferLength,
                                      &nameLength32);
+  record = descriptor->findRecord(recNumber);
   if (stringLengthPtr)
     *stringLengthPtr = static_cast<SQLSMALLINT>(std::min<SQLINTEGER>(nameLength32, SHRT_MAX));
   if (typePtr)
@@ -5397,6 +5424,10 @@ SQLRETURN SQL_API SQLPrepare(SQLHSTMT statementHandle, SQLCHAR* statementText,
   }
   auto stmt = static_cast<StatementHandle*>(statementHandle);
   stmt->clearDiagnostics();
+  if (stmt->needsParameterData) {
+    stmt->addDiagnostic("HY010", "Function sequence error");
+    return SQL_ERROR;
+  }
   if (!statementText) {
     stmt->addDiagnostic("HY009", "Invalid use of null pointer");
     return SQL_ERROR;
@@ -5950,6 +5981,10 @@ SQLRETURN SQL_API SQLSetStmtAttr(SQLHSTMT statementHandle, SQLINTEGER attribute,
     return SQL_INVALID_HANDLE;
   }
   stmt->clearDiagnostics();
+  if (stmt->needsParameterData) {
+    stmt->addDiagnostic("HY010", "Function sequence error");
+    return SQL_ERROR;
+  }
 
   switch (attribute) {
   case SQL_QUERY_TIMEOUT:
