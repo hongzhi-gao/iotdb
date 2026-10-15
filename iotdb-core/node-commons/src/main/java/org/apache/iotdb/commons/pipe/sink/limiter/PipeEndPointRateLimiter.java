@@ -65,15 +65,11 @@ public class PipeEndPointRateLimiter {
             endPoint, e -> RateLimiter.create(bytesPerSecondLimit));
 
     while (bytes > 0) {
-      if (bytes > Integer.MAX_VALUE) {
-        if (!tryAcquireWithPipeCheck(rateLimiter, Integer.MAX_VALUE)) {
-          return;
-        }
-        bytes -= Integer.MAX_VALUE;
-      } else {
-        tryAcquireWithPipeCheck(rateLimiter, (int) bytes);
+      final int permits = PipeRateLimiterUtils.nextAcquirePermits(bytes, rateLimiter.getRate());
+      if (!tryAcquireWithPipeCheck(rateLimiter, permits)) {
         return;
       }
+      bytes -= permits;
     }
   }
 
