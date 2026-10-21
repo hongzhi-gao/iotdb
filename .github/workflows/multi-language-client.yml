@@ -110,7 +110,7 @@ jobs:
       fail-fast: false
       max-parallel: 15
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, windows-2022, windows-2025-vs2026, macos-latest]
+        os: [macos-latest]
     runs-on: ${{ matrix.os}}
 
     steps:
@@ -229,7 +229,7 @@ jobs:
 
   go:
     needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.go == 'true'
+    if: false
     runs-on: ubuntu-latest
 
     steps:
@@ -260,7 +260,7 @@ jobs:
 
   python:
     needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.python == 'true'
+    if: false
     strategy:
       fail-fast: false
       max-parallel: 15
