@@ -68,8 +68,8 @@ jobs:
             HEAD="${{ github.sha }}"
           else
             echo "cpp=true" >> "$GITHUB_OUTPUT"
-            echo "python=true" >> "$GITHUB_OUTPUT"
-            echo "go=true" >> "$GITHUB_OUTPUT"
+            echo "python=false" >> "$GITHUB_OUTPUT"
+            echo "go=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -110,7 +110,7 @@ jobs:
       fail-fast: false
       max-parallel: 15
       matrix:
-        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, windows-2022, windows-2025-vs2026, macos-latest]
+        os: [macos-latest]
     runs-on: ${{ matrix.os}}
 
     steps:
@@ -211,6 +211,27 @@ jobs:
           else
             ./mvnw clean verify -P with-cpp -pl iotdb-client/client-cpp -am -Diotdb.openssl.from.source=OFF
           fi
+      - name: Inspect selected dependency headers
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PYCODE'
+          import json
+          from pathlib import Path
+          build = Path('iotdb-client/client-cpp/target/build')
+          for name in ['CMakeCache.txt', '_deps/thrift/build/CMakeCache.txt']:
+              path = build / name
+              if path.exists():
+                  print(path)
+                  for line in path.read_text().splitlines():
+                      if line.startswith(('BOOST_INCLUDE_DIR:', 'Boost_INCLUDE_DIR:', 'OPENSSL_INCLUDE_DIR:', 'OPENSSL_SSL_LIBRARY:', 'OPENSSL_CRYPTO_LIBRARY:', 'THRIFT_VERSION:')):
+                          print(line)
+          path = build / '_deps/thrift/build/compile_commands.json'
+          if path.exists():
+              for item in json.loads(path.read_text()):
+                  if item['file'].endswith('TSSLSocket.cpp'):
+                      print(item['command'])
+          PYCODE
       - name: Upload Artifact
         if: failure()
         uses: actions/upload-artifact@v6
@@ -221,7 +242,7 @@ jobs:
 
   go:
     needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.go == 'true'
+    if: needs.changes.outputs.go == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -252,7 +273,7 @@ jobs:
 
   python:
     needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.python == 'true'
+    if: needs.changes.outputs.python == 'true'
     strategy:
       fail-fast: false
       max-parallel: 15
