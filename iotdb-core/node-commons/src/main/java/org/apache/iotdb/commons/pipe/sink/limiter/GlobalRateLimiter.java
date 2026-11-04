@@ -43,30 +43,30 @@ public abstract class GlobalRateLimiter {
   }
 
   public void acquire(long bytes) {
-    if (reloadParams()) {
-      return;
-    }
-
     while (bytes > 0) {
-      if (bytes > Integer.MAX_VALUE) {
-        tryAcquireWithRateCheck(Integer.MAX_VALUE);
-        bytes -= Integer.MAX_VALUE;
-      } else {
-        tryAcquireWithRateCheck((int) bytes);
+      if (reloadParams()) {
         return;
+      }
+
+      final double currentRate = rateLimiter.getRate();
+      final int permits = PipeRateLimiterUtils.nextAcquirePermits(bytes, currentRate);
+      if (tryAcquireWithRateCheck(permits, currentRate)) {
+        bytes -= permits;
       }
     }
   }
 
-  private void tryAcquireWithRateCheck(final int bytes) {
+  private boolean tryAcquireWithRateCheck(final int bytes, final double expectedRate) {
     while (!rateLimiter.tryAcquire(
         bytes,
         PipeConfig.getInstance().getRateLimiterHotReloadCheckIntervalMs(),
         TimeUnit.MILLISECONDS)) {
-      if (reloadParams()) {
-        return;
+      // Recalculate the chunk size if the configured rate changes while waiting.
+      if (reloadParams() || Double.compare(expectedRate, rateLimiter.getRate()) != 0) {
+        return false;
       }
     }
+    return true;
   }
 
   private boolean reloadParams() {
